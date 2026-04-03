@@ -90,7 +90,7 @@ zeck info model_zeck.pt
 | NVIDIA 2:4 pruned | 88.55% | 3.11% | 50.9% |
 | Zeckendorf + Fibonacci encoded | 87.45% | 4.21% | 50.8% |
 
-Hardware savings (vs dense binary): 86% multiplier area, 71% power-delay product.  
+Hardware savings (vs dense binary): 86% multiplier area, 71% power-delay product.
 Free integrity: 32% single-bit-flip detection via adjacency check.
 
 ## How It Works
@@ -107,10 +107,6 @@ All three properties — structured sparsity, efficient arithmetic, free error d
 @software{zeckendorf_prune,
   title={Zeckendorf-Prune: Structured Sparsity via the Adjacency Constraint},
   year={2026},
-  url={https://github.com/TODO/zeckendorf-prune}
+  url={https://github.com/ezexe/zeckendorf-prune}
 }
 ```
-
-## License
-
-MIT
