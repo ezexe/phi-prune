@@ -80,8 +80,7 @@ def demo_mode(model):
     import urllib.request
 
     samples = {
-        "cat.jpg": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg",
-        "plane.jpg": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/ANA_Boeing_777-300ER_JA735A_Tokimeki_Yellow.jpg/1280px-ANA_Boeing_777-300ER_JA735A_Tokimeki_Yellow.jpg",
+        "cat.jpg": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg"
     }
 
     for name, url in samples.items():
