@@ -185,6 +185,12 @@ class TestAPI:
         pruned, masks = prune(model, prune_head=True)
         assert "6.weight" in masks
 
+    def test_conv_only_layer_types_prunes_every_conv(self):
+        """layer_types=(nn.Conv2d,) already leaves the Linear head out; every conv still gets pruned."""
+        model = self._make_model()
+        pruned, masks = prune(model, layer_types=(nn.Conv2d,))
+        assert set(masks) == {"0.weight", "2.weight"}
+
     def test_exclude_keeps_named_layers_dense(self):
         model = self._make_model()
         pruned, masks = prune(model, exclude={"0"})

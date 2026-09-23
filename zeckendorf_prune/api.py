@@ -48,11 +48,13 @@ def prune(
         min_dim: Skip layers smaller than this along the prune axis
         inplace: If False, works on a deep copy
         score_fn: Weight importance metric ("magnitude")
-        prune_head: Also prune the last eligible layer in registration
-                    order — the classifier head in standard architectures.
-                    Off by default: along axis 0 its positions are the
-                    classes, and the constraint keeps at most half of them,
-                    leaving the rest with a bias-only logit
+        prune_head: Also prune the model's last weight layer (its last
+                    Conv2d, Linear or layer_types module in registration
+                    order) — the classifier head in standard architectures —
+                    when layer_types selects it. Off by default: along axis 0
+                    its positions are the classes, and the constraint keeps
+                    at most half of them, leaving the rest with a bias-only
+                    logit
         exclude: Module names to leave dense (e.g. {"fc"}), for a head
                  that is not registered last or any other layer to keep
 
@@ -64,8 +66,15 @@ def prune(
 
     targets = [(name, m) for name, m in model.named_modules() if isinstance(m, layer_types)]
     keep_dense = {exclude} if isinstance(exclude, str) else set(exclude)
-    if not prune_head and targets:
-        keep_dense.add(targets[-1][0])
+    if not prune_head:
+        # The head is the model's last weight layer whatever layer_types selects: with
+        # layer_types=(nn.Conv2d,) a Linear head is already out, and the last conv is no head.
+        extra = layer_types if isinstance(layer_types, tuple) else (layer_types,)
+        weight_layers = [
+            n for n, m in model.named_modules() if isinstance(m, (nn.Conv2d, nn.Linear) + extra)
+        ]
+        if weight_layers:
+            keep_dense.add(weight_layers[-1])
 
     masks = {}
     stats = {"total_params": 0, "active_params": 0, "pruned_layers": 0}
