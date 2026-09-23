@@ -322,6 +322,7 @@ class TestExport:
 
         path = tmp_path / "model.zeck"
         stats = export_bitstream(pruned, masks, enc, scales, str(path))
+        assert b"\r" not in path.read_bytes()  # the header line ends in "\n" on every platform
         header_line, payload = path.read_text().split("\n", 1)
         header = json.loads(header_line)
         assert sum(layer["n_active"] for layer in header["layers"]) == stats["n_weights"] == len(expected)
@@ -348,3 +349,30 @@ class TestExport:
         assert [layer["name"] for layer in header["layers"]] == list(masks)
         for (name, before), after in zip(pruned.named_parameters(), restored.parameters()):
             assert torch.equal(before, after), name
+
+    def test_load_bitstream_refusals(self, tmp_path):
+        """load_bitstream refuses an old header, a short payload or a misfit mask, and writes nothing."""
+        pruned, masks, enc, scales = self._encoded_model()
+        path = tmp_path / "model.zeck"
+        export_bitstream(pruned, masks, enc, scales, str(path))
+        header_line, payload = path.read_text().split("\n", 1)
+        old = json.loads(header_line)
+        del old["encoder"]["codeword_digits"], old["encoder"]["level_bias"]
+        last = list(masks)[-1]
+        misfit = {**masks, last: torch.ones_like(masks[last])}
+        refusals = [
+            (json.dumps(old) + "\n" + payload, masks, "level_bias"),
+            (header_line + "\n" + payload[:-2], masks, "payload holds"),  # the last codeword cut off
+            (header_line + "\n" + payload, misfit, "does not match"),
+        ]
+
+        target = copy.deepcopy(pruned)
+        for name, param in target.named_parameters():
+            if name in masks:
+                param.data[masks[name].bool()] = 0.0
+        before = copy.deepcopy(target.state_dict())
+        for text, file_masks, message in refusals:
+            path.write_text(text)
+            with pytest.raises(ValueError, match=message):
+                load_bitstream(target, file_masks, str(path))
+        assert all(torch.equal(before[k], v) for k, v in target.state_dict().items())

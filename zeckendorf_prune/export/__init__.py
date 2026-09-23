@@ -176,8 +176,8 @@ def export_bitstream(
 
     bitstream = encoder.encode_to_stream(all_levels)
 
-    # Write header + payload
-    with open(path, "w") as f:
+    # Write header + payload, with a "\n" newline on every platform
+    with open(path, "w", newline="\n") as f:
         f.write(json.dumps(header) + "\n")
         f.write(bitstream)
 
@@ -203,7 +203,9 @@ def load_bitstream(
     level / scale + offset, into its masked positions in place; the
     other positions keep their values. The header holds each layer's
     shape, n_active, scale and offset but not its mask, so pass the
-    masks the export used (save_checkpoint stores them).
+    masks the export used (save_checkpoint stores them). A file that
+    the model or masks don't fit raises ValueError before any weight
+    is written.
 
     Returns:
         The file's JSON header
@@ -220,21 +222,26 @@ def load_bitstream(
             "before those fields cannot be parsed past level 0, so export again"
         )
     levels = FibonacciEncoder(n_digits).decode_from_stream(payload)
+    total = sum(layer["n_active"] for layer in header["layers"])
+    if total != len(levels):
+        raise ValueError(f"{path}: the payload holds {len(levels)} levels, the header counts {total}")
 
+    # Check every layer before writing any, so a refused file leaves the model as it was
     params = dict(model.named_parameters())
-    start = 0
+    targets = []
     for layer in header["layers"]:
-        name, n_active = layer["name"], layer["n_active"]
-        param = params[name]
-        keep = masks[name].bool().to(param.device)
-        if list(param.shape) != layer["shape"] or int(keep.sum()) != n_active:
-            raise ValueError(f"{path}: layer {name} does not match the model's shape or mask")
+        param = params[layer["name"]]
+        keep = masks[layer["name"]].bool().to(param.device)
+        if list(param.shape) != layer["shape"] or int(keep.sum()) != layer["n_active"]:
+            raise ValueError(f"{path}: layer {layer['name']} does not match the model's shape or mask")
+        targets.append((param, keep, layer))
+
+    start = 0
+    for param, keep, layer in targets:
+        n_active = layer["n_active"]
         # encode_tensor's scale-back arithmetic, so encoded weights come back bit for bit
         layer_levels = np.asarray(levels[start:start + n_active], dtype=np.float64)
         decoded = layer_levels / layer["scale"] + layer["offset"]
         param.data[keep] = torch.tensor(decoded, dtype=param.dtype, device=param.device)
         start += n_active
-
-    if start != len(levels):
-        raise ValueError(f"{path}: the payload holds {len(levels)} levels, the header counts {start}")
     return header
