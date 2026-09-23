@@ -8,6 +8,7 @@ Supports:
 """
 
 import torch
+import numpy as np
 import json
 import os
 from typing import Dict, Optional
@@ -125,15 +126,19 @@ def export_bitstream(
     Level l of a layer is the weight l / scale + offset, and the
     layers' n_active counts split the levels in payload order.
 
-    scales maps each parameter name to (scale, offset). encode_tensor
-    returns the scale but not the offset, which is the layer's smallest
-    kept weight: encode_tensor maps it to level 0 and leaves it
-    unchanged, so it reads the same before or after encoding.
+    scales maps each parameter name to (scale, offset), the pair
+    encode_tensor returns with return_offset=True. The offset is the
+    layer's smallest kept weight, which encode_tensor maps to level 0
+    and leaves unchanged, so a caller holding only the 3-value result
+    can take param.data[mask.bool()].min().item() before or after
+    encoding.
 
-        offset = param.data[mask.bool()].min().item()
-        encoded, scale, _ = encoder.encode_tensor(param.data, mask=mask)
+        encoded, scale, _, offset = encoder.encode_tensor(
+            param.data, mask=mask, return_offset=True)
         param.data.copy_(encoded)
         scales[name] = (scale, offset)
+
+    load_bitstream reads the file back into a model.
     """
     # encode_to_stream's layout: level + 1 in n_digits + 1 digits, so level 0 keeps a '11' delimiter
     header = {
@@ -184,3 +189,52 @@ def export_bitstream(
         "bits_per_weight": bits_per_weight,
         "header_bytes": len(json.dumps(header)),
     }
+
+
+def load_bitstream(
+    model: torch.nn.Module,
+    masks: Dict[str, torch.Tensor],
+    path: str,
+) -> Dict:
+    """
+    Read a bitstream written by export_bitstream back into a model.
+
+    Decodes the payload's levels and writes each layer's weights,
+    level / scale + offset, into its masked positions in place; the
+    other positions keep their values. The header holds each layer's
+    shape, n_active, scale and offset but not its mask, so pass the
+    masks the export used (save_checkpoint stores them).
+
+    Returns:
+        The file's JSON header
+    """
+    with open(path) as f:
+        header = json.loads(f.readline())
+        payload = f.read().strip()
+
+    layout = header["encoder"]
+    n_digits = layout["n_digits"]
+    if (layout.get("codeword_digits"), layout.get("level_bias")) != (n_digits + 1, 1):
+        raise ValueError(
+            f"{path}: header lacks codeword_digits {n_digits + 1} / level_bias 1; files exported "
+            "before those fields cannot be parsed past level 0, so export again"
+        )
+    levels = FibonacciEncoder(n_digits).decode_from_stream(payload)
+
+    params = dict(model.named_parameters())
+    start = 0
+    for layer in header["layers"]:
+        name, n_active = layer["name"], layer["n_active"]
+        param = params[name]
+        keep = masks[name].bool().to(param.device)
+        if list(param.shape) != layer["shape"] or int(keep.sum()) != n_active:
+            raise ValueError(f"{path}: layer {name} does not match the model's shape or mask")
+        # encode_tensor's scale-back arithmetic, so encoded weights come back bit for bit
+        layer_levels = np.asarray(levels[start:start + n_active], dtype=np.float64)
+        decoded = layer_levels / layer["scale"] + layer["offset"]
+        param.data[keep] = torch.tensor(decoded, dtype=param.dtype, device=param.device)
+        start += n_active
+
+    if start != len(levels):
+        raise ValueError(f"{path}: the payload holds {len(levels)} levels, the header counts {start}")
+    return header
