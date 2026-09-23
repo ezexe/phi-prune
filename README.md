@@ -87,6 +87,17 @@ zeck info model_zeck.pt
 Hardware savings (vs dense binary): 86% multiplier area, 71% power-delay product.
 Free integrity: 32% single-bit-flip detection via adjacency check.
 
+## Benchmark Results (ResNet-18, CIFAR-10 at 224 px, Colab T4)
+
+| Method | Accuracy | Drop | Conv density |
+|--------|----------|------|--------------|
+| Dense (ImageNet weights, 2 epochs fine-tuned) | 94.81% | — | 100% |
+| Zeckendorf pruned, 5 epochs fine-tuned | 88.05% | 6.76% | 49.8% |
+
+One run of [`.docs/quickstart_gpu.ipynb`](.docs/quickstart_gpu.ipynb) with zeckendorf-prune 0.2.1 on 2026-09-23.
+All 20 conv layers are pruned and the `fc` head stays dense; training is SGD with a cosine schedule under fp16 autocast, at lr 0.01 for the dense epochs and lr 0.001 after pruning.
+Each epoch, evaluation included, took about a minute on the T4.
+
 ## How It Works
 
 The Zeckendorf constraint ("no two consecutive 1s") is applied along the output channel axis of each layer.
