@@ -33,8 +33,15 @@ assert report["_summary"]["all_masks_valid"]
 from zeckendorf_prune import FibonacciEncoder
 
 encoder = FibonacciEncoder(n_digits=8)  # 55 quantization levels
-# Encode surviving weights
-encoded_tensor, scale, rmse = encoder.encode_tensor(weight, mask=mask)
+# Encode surviving weights, layer by layer
+scales = {}  # name → (scale, offset) for cassini_check, save_checkpoint, export_bitstream
+for name, param in model.named_parameters():
+    if name in masks:
+        # encode_tensor returns the scale; the offset is the smallest kept weight (level 0)
+        offset = param.data[masks[name].bool()].min().item()
+        encoded, scale, rmse = encoder.encode_tensor(param.data, mask=masks[name])
+        param.data.copy_(encoded)
+        scales[name] = (scale, offset)
 # → Weights are now sums of non-consecutive Fibonacci numbers
 # → Multiplication = shift-and-add (no multiplier needed)
 ```
