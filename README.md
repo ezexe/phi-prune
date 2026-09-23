@@ -37,9 +37,9 @@ encoder = FibonacciEncoder(n_digits=8)  # 55 quantization levels
 scales = {}  # name → (scale, offset) for cassini_check, save_checkpoint, export_bitstream
 for name, param in model.named_parameters():
     if name in masks:
-        # encode_tensor returns the scale; the offset is the smallest kept weight (level 0)
-        offset = param.data[masks[name].bool()].min().item()
-        encoded, scale, rmse = encoder.encode_tensor(param.data, mask=masks[name])
+        # offset: the smallest kept weight, which lands on level 0
+        encoded, scale, rmse, offset = encoder.encode_tensor(param.data, mask=masks[name],
+                                                             return_offset=True)
         param.data.copy_(encoded)
         scales[name] = (scale, offset)
 # → Weights are now sums of non-consecutive Fibonacci numbers
@@ -59,7 +59,7 @@ print(f"Pass rate: {report['_aggregate']['pass_rate']:.1%}")
 ## Export
 
 ```python
-from zeckendorf_prune.export import save_checkpoint, export_onnx, export_bitstream
+from zeckendorf_prune.export import save_checkpoint, export_onnx, export_bitstream, load_bitstream
 
 # PyTorch checkpoint (includes masks + metadata)
 save_checkpoint(model, masks, "model_zeck.pt", encoder=encoder, scales=scales)
@@ -70,6 +70,8 @@ export_onnx(model, "model_zeck.onnx")
 # Self-delimiting bitstream (minimal format for edge deployment)
 stats = export_bitstream(model, masks, encoder, scales, "model.zeck")
 print(f"{stats['bits_per_weight']:.1f} bits/weight")
+# Read it back: decodes the weights into the masked positions of a model with the same masks
+load_bitstream(model, masks, "model.zeck")
 ```
 
 ## CLI

@@ -9,7 +9,7 @@ provides self-delimiting bitstreams for serialization.
 
 import torch
 import numpy as np
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Union
 
 
 # Pre-compute Fibonacci sequence
@@ -59,7 +59,9 @@ class FibonacciEncoder:
         self,
         tensor: torch.Tensor,
         mask: torch.Tensor = None,
-    ) -> Tuple[torch.Tensor, float, float]:
+        *,
+        return_offset: bool = False,
+    ) -> Union[Tuple[torch.Tensor, float, float], Tuple[torch.Tensor, float, float, float]]:
         """
         Quantize a weight tensor to the Fibonacci grid.
 
@@ -69,23 +71,32 @@ class FibonacciEncoder:
         Args:
             tensor: Weight tensor to encode
             mask: Optional binary mask (only encode nonzero positions)
+            return_offset: Also return the offset, the smallest encoded
+                value (0.0 when the mask keeps nothing), which lands on
+                level 0. (scale, offset) is the per-layer pair that
+                export_bitstream, save_checkpoint and cassini_check take
+                in scales
 
         Returns:
-            (encoded_tensor, scale_factor, rmse)
+            (encoded_tensor, scale_factor, rmse), with the offset as a
+            fourth value when return_offset is set
         """
+        def out(encoded, scale, rmse, offset):
+            return (encoded, scale, rmse, offset) if return_offset else (encoded, scale, rmse)
+
         if mask is not None:
             active = tensor[mask.bool()]
         else:
             active = tensor.flatten()
 
         if active.numel() == 0:
-            return tensor.clone(), 1.0, 0.0
+            return out(tensor.clone(), 1.0, 0.0, 0.0)
 
         # Scale to [0, max_value]
         vmin, vmax = active.min().item(), active.max().item()
         span = vmax - vmin
         if span < 1e-10:
-            return tensor.clone(), 1.0, 0.0
+            return out(tensor.clone(), 1.0, 0.0, vmin)
 
         scale = self.max_value / span
         offset = vmin
@@ -114,7 +125,7 @@ class FibonacciEncoder:
         else:
             result = torch.tensor(decoded, dtype=tensor.dtype, device=tensor.device).reshape(tensor.shape)
 
-        return result, scale, rmse
+        return out(result, scale, rmse, offset)
 
     def to_codeword(self, grid_value: int) -> list:
         """

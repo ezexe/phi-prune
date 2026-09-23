@@ -1,5 +1,6 @@
 """Tests for zeckendorf-prune core functionality."""
 
+import copy
 import json
 import numpy as np
 import torch
@@ -12,7 +13,7 @@ from zeckendorf_prune.masks import (
 from zeckendorf_prune.encoding import FibonacciEncoder
 from zeckendorf_prune.integrity import adjacency_check, simulate_corruption
 from zeckendorf_prune.api import prune, finetune, check
-from zeckendorf_prune.export import export_bitstream
+from zeckendorf_prune.export import export_bitstream, load_bitstream
 
 
 # ── Mask DP ──
@@ -135,6 +136,21 @@ class TestFibonacciEncoder:
         assert scale == 1.0
         assert encoded.tolist() == [0.0, 4.0, 5.0, 143.0]
         assert rmse == pytest.approx(0.3 / np.sqrt(2), abs=1e-6)
+
+    def test_encode_return_offset(self):
+        """return_offset adds the smallest kept value, which level 0 decodes back to unchanged."""
+        enc = FibonacciEncoder(n_digits=8)
+        t = torch.randn(8, 4)
+        mask = torch.zeros_like(t)
+        mask[::2] = 1
+        encoded, scale, rmse, offset = enc.encode_tensor(t, mask=mask, return_offset=True)
+        assert offset == t[mask.bool()].min().item() == encoded[mask.bool()].min().item()
+        plain = enc.encode_tensor(t, mask=mask)
+        assert len(plain) == 3
+        assert torch.equal(plain[0], encoded) and plain[1:] == (scale, rmse)
+        # The degenerate cases: a constant tensor, and a mask that keeps nothing
+        assert enc.encode_tensor(torch.full((4,), 0.25), return_offset=True)[3] == 0.25
+        assert enc.encode_tensor(t, mask=torch.zeros_like(t), return_offset=True)[3] == 0.0
 
     def test_stream_roundtrip(self):
         """Encode values to bitstream and decode back."""
@@ -278,26 +294,35 @@ class TestAPI:
 # ── Export ──
 
 class TestExport:
-    def test_bitstream_roundtrip(self, tmp_path):
-        """The payload parses back to the encoded levels, level 0 (each layer's minimum) included."""
+    def _encoded_model(self):
+        """A pruned MLP with its masked layers encoded in place, plus their (scale, offset) scales."""
         model = nn.Sequential(nn.Linear(16, 32), nn.ReLU(), nn.Linear(32, 16), nn.ReLU(), nn.Linear(16, 10))
         pruned, masks = prune(model)
         enc = FibonacciEncoder(n_digits=8)
-        scales, expected = {}, []
+        scales = {}
         for name, param in pruned.named_parameters():
-            if name not in masks:
-                continue
-            keep = masks[name].bool()
-            offset = param.data[keep].min().item()
-            encoded, scale, _ = enc.encode_tensor(param.data, mask=masks[name])
-            param.data.copy_(encoded)
-            scales[name] = (scale, offset)
-            levels = ((encoded[keep].double() - offset) * scale).round().long().tolist()
-            assert min(levels) == 0
-            expected.extend(levels)
+            if name in masks:
+                encoded, scale, _, offset = enc.encode_tensor(param.data, mask=masks[name],
+                                                              return_offset=True)
+                param.data.copy_(encoded)
+                scales[name] = (scale, offset)
+        return pruned, masks, enc, scales
+
+    def test_bitstream_roundtrip(self, tmp_path):
+        """The payload parses back to the encoded levels, level 0 (each layer's minimum) included."""
+        pruned, masks, enc, scales = self._encoded_model()
+        expected = []
+        for name, param in pruned.named_parameters():
+            if name in masks:
+                scale, offset = scales[name]
+                kept = param.data[masks[name].bool()].double()
+                levels = ((kept - offset) * scale).round().long().tolist()
+                assert min(levels) == 0
+                expected.extend(levels)
 
         path = tmp_path / "model.zeck"
         stats = export_bitstream(pruned, masks, enc, scales, str(path))
+        assert b"\r" not in path.read_bytes()  # the header line ends in "\n" on every platform
         header_line, payload = path.read_text().split("\n", 1)
         header = json.loads(header_line)
         assert sum(layer["n_active"] for layer in header["layers"]) == stats["n_weights"] == len(expected)
@@ -309,3 +334,45 @@ class TestExport:
         recovered = [sum(f * d for f, d in zip(fibs, cw)) - bias
                      for cw in FibonacciEncoder.parse_bitstream(payload, width)]
         assert recovered == expected
+
+    def test_load_bitstream_restores_encoded_weights(self, tmp_path):
+        """load_bitstream writes the decoded weights back into the masked positions, bit for bit."""
+        pruned, masks, enc, scales = self._encoded_model()
+        path = str(tmp_path / "model.zeck")
+        export_bitstream(pruned, masks, enc, scales, path)
+
+        restored = copy.deepcopy(pruned)
+        for name, param in restored.named_parameters():
+            if name in masks:
+                param.data[masks[name].bool()] = 0.0
+        header = load_bitstream(restored, masks, path)
+        assert [layer["name"] for layer in header["layers"]] == list(masks)
+        for (name, before), after in zip(pruned.named_parameters(), restored.parameters()):
+            assert torch.equal(before, after), name
+
+    def test_load_bitstream_refusals(self, tmp_path):
+        """load_bitstream refuses an old header, a short payload or a misfit mask, and writes nothing."""
+        pruned, masks, enc, scales = self._encoded_model()
+        path = tmp_path / "model.zeck"
+        export_bitstream(pruned, masks, enc, scales, str(path))
+        header_line, payload = path.read_text().split("\n", 1)
+        old = json.loads(header_line)
+        del old["encoder"]["codeword_digits"], old["encoder"]["level_bias"]
+        last = list(masks)[-1]
+        misfit = {**masks, last: torch.ones_like(masks[last])}
+        refusals = [
+            (json.dumps(old) + "\n" + payload, masks, "level_bias"),
+            (header_line + "\n" + payload[:-2], masks, "payload holds"),  # the last codeword cut off
+            (header_line + "\n" + payload, misfit, "does not match"),
+        ]
+
+        target = copy.deepcopy(pruned)
+        for name, param in target.named_parameters():
+            if name in masks:
+                param.data[masks[name].bool()] = 0.0
+        before = copy.deepcopy(target.state_dict())
+        for text, file_masks, message in refusals:
+            path.write_text(text)
+            with pytest.raises(ValueError, match=message):
+                load_bitstream(target, file_masks, str(path))
+        assert all(torch.equal(before[k], v) for k, v in target.state_dict().items())
