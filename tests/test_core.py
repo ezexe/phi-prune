@@ -1,5 +1,6 @@
 """Tests for zeckendorf-prune core functionality."""
 
+import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,6 +10,7 @@ from zeckendorf_prune.masks import zeckendorf_dp, zeckendorf_mask, verify_mask, 
 from zeckendorf_prune.encoding import FibonacciEncoder
 from zeckendorf_prune.integrity import adjacency_check, simulate_corruption
 from zeckendorf_prune.api import prune, finetune, check
+from zeckendorf_prune.export import export_bitstream
 
 
 # ── Mask DP ──
@@ -217,3 +219,39 @@ class TestAPI:
                           verbose=False, amp=True)
         assert result["best_val_acc"] is not None
         assert check(pruned, masks)["_summary"]["all_zeros_enforced"]
+
+
+# ── Export ──
+
+class TestExport:
+    def test_bitstream_roundtrip(self, tmp_path):
+        """The payload parses back to the encoded levels, level 0 (each layer's minimum) included."""
+        model = nn.Sequential(nn.Linear(16, 32), nn.ReLU(), nn.Linear(32, 16), nn.ReLU(), nn.Linear(16, 10))
+        pruned, masks = prune(model)
+        enc = FibonacciEncoder(n_digits=8)
+        scales, expected = {}, []
+        for name, param in pruned.named_parameters():
+            if name not in masks:
+                continue
+            keep = masks[name].bool()
+            offset = param.data[keep].min().item()
+            encoded, scale, _ = enc.encode_tensor(param.data, mask=masks[name])
+            param.data.copy_(encoded)
+            scales[name] = (scale, offset)
+            levels = ((encoded[keep].double() - offset) * scale).round().long().tolist()
+            assert min(levels) == 0
+            expected.extend(levels)
+
+        path = tmp_path / "model.zeck"
+        stats = export_bitstream(pruned, masks, enc, scales, str(path))
+        header_line, payload = path.read_text().split("\n", 1)
+        header = json.loads(header_line)
+        assert sum(layer["n_active"] for layer in header["layers"]) == stats["n_weights"] == len(expected)
+
+        # A header without codeword_digits / level_bias holds bare levels in n_digits-wide codewords
+        width = header["encoder"].get("codeword_digits", header["encoder"]["n_digits"])
+        bias = header["encoder"].get("level_bias", 0)
+        fibs = FibonacciEncoder(n_digits=width).fibs
+        recovered = [sum(f * d for f, d in zip(fibs, cw)) - bias
+                     for cw in FibonacciEncoder.parse_bitstream(payload, width)]
+        assert recovered == expected

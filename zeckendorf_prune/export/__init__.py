@@ -109,15 +109,40 @@ def export_bitstream(
     Export weights as a self-delimiting Fibonacci bitstream.
 
     Output format:
-    1. JSON header: layer names, shapes, scale/offset per layer
+    1. JSON header: layer names, shapes, scale/offset per layer, and the
+       encoder's n_digits, codeword_digits and level_bias
     2. Binary payload: concatenated self-delimiting Fibonacci codewords
-       for all active weights, in parameter order
+       for all active weights, in parameter order. Each codeword is
+       level + level_bias in up to codeword_digits digits, as
+       encode_to_stream writes it, so level 0 still ends in '11'
 
     The bitstream is parseable without knowing tensor shapes —
-    each codeword boundary is found by scanning for '11'.
+    each codeword boundary is found by scanning for '11'. A reader
+    subtracts level_bias from each parsed value to get the level;
+    FibonacciEncoder(n_digits).decode_from_stream(payload) does both.
+    Level l of a layer is the weight l / scale + offset, and the
+    layers' n_active counts split the levels in payload order.
+
+    scales maps each parameter name to (scale, offset). encode_tensor
+    returns the scale but not the offset, which is the layer's smallest
+    kept weight: encode_tensor maps it to level 0 and leaves it
+    unchanged, so it reads the same before or after encoding.
+
+        offset = param.data[mask.bool()].min().item()
+        encoded, scale, _ = encoder.encode_tensor(param.data, mask=mask)
+        param.data.copy_(encoded)
+        scales[name] = (scale, offset)
     """
-    header = {"layers": [], "encoder": {"n_digits": encoder.n_digits}}
-    all_codewords = []
+    # encode_to_stream's layout: level + 1 in n_digits + 1 digits, so level 0 keeps a '11' delimiter
+    header = {
+        "layers": [],
+        "encoder": {
+            "n_digits": encoder.n_digits,
+            "codeword_digits": encoder.n_digits + 1,
+            "level_bias": 1,
+        },
+    }
+    all_levels = []
 
     for name, param in model.named_parameters():
         if name not in masks or name not in scales:
@@ -127,33 +152,32 @@ def export_bitstream(
         scale, offset = scales[name]
         active = param.data[mask.bool()].cpu().numpy()
 
-        layer_codewords = []
+        layer_levels = []
         for val in active:
             grid_val = round((val - offset) * scale)
             grid_val = max(0, min(grid_val, encoder.max_value))
-            cw = encoder.to_codeword(int(grid_val))
-            layer_codewords.append(cw)
+            layer_levels.append(int(grid_val))
 
         header["layers"].append({
             "name": name,
             "shape": list(param.shape),
-            "n_active": len(layer_codewords),
+            "n_active": len(layer_levels),
             "scale": float(scale),
             "offset": float(offset),
         })
-        all_codewords.extend(layer_codewords)
+        all_levels.extend(layer_levels)
 
-    bitstream = encoder.to_bitstream(all_codewords)
+    bitstream = encoder.encode_to_stream(all_levels)
 
     # Write header + payload
     with open(path, "w") as f:
         f.write(json.dumps(header) + "\n")
         f.write(bitstream)
 
-    bits_per_weight = len(bitstream) / len(all_codewords) if all_codewords else 0
+    bits_per_weight = len(bitstream) / len(all_levels) if all_levels else 0
     return {
         "path": path,
-        "n_weights": len(all_codewords),
+        "n_weights": len(all_levels),
         "bitstream_length": len(bitstream),
         "bits_per_weight": bits_per_weight,
         "header_bytes": len(json.dumps(header)),
