@@ -98,6 +98,16 @@ class TestFibonacciEncoder:
         assert encoded.shape == t.shape
         assert rmse < 1.0  # quantization error scales with value range
 
+    def test_encode_snaps_to_nearest_level(self):
+        """A value between two grid levels snaps to the nearer one, below as well as above."""
+        enc = FibonacciEncoder(n_digits=10)  # grid: every integer 0..143
+        # 0 and 143 pin the min-max scaling to the identity, so 4.3 and 4.7 reach the grid as-is
+        t = torch.tensor([0.0, 4.3, 4.7, 143.0])
+        encoded, scale, rmse = enc.encode_tensor(t)
+        assert scale == 1.0
+        assert encoded.tolist() == [0.0, 4.0, 5.0, 143.0]
+        assert rmse == pytest.approx(0.3 / np.sqrt(2), abs=1e-6)
+
     def test_stream_roundtrip(self):
         """Encode values to bitstream and decode back."""
         enc = FibonacciEncoder(n_digits=8)
