@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from zeckendorf_prune.masks import zeckendorf_mask, mask_stats
+from zeckendorf_prune.masks import get_pattern, mask_stats
 
 
 # ───────────────────────────────────────────────────────────
@@ -32,12 +32,14 @@ def prune(
     score_fn: str = "magnitude",
     prune_head: bool = False,
     exclude: Iterable[str] = (),
+    pattern: str = "zeckendorf",
 ) -> Tuple[nn.Module, Dict[str, torch.Tensor]]:
     """
     Apply Zeckendorf-constrained pruning to a model.
 
     Generates an adjacency-constrained mask for each eligible layer
-    and zeros the pruned weights.
+    and zeros the pruned weights. pattern="2:4" applies the 2-of-4
+    baseline instead.
 
     Args:
         model: Trained PyTorch model
@@ -57,10 +59,15 @@ def prune(
                     logit
         exclude: Module names to leave dense (e.g. {"fc"}), for a head
                  that is not registered last or any other layer to keep
+        pattern: "zeckendorf" (no two adjacent positions along `axis`) or
+                 "2:4" (2 of every 4 consecutive positions along `axis`, the
+                 baseline in .docs/experiment/Zeckendorf.py; for axis=0 it
+                 keeps whole channels, not NVIDIA's 2-of-4 weights per row)
 
     Returns:
         (pruned_model, masks) where masks maps param names to mask tensors
     """
+    make_mask = get_pattern(pattern)[0]
     if not inplace:
         model = copy.deepcopy(model)
 
@@ -77,7 +84,7 @@ def prune(
             keep_dense.add(weight_layers[-1])
 
     masks = {}
-    stats = {"total_params": 0, "active_params": 0, "pruned_layers": 0}
+    stats = {"total_params": 0, "active_params": 0, "pruned_layers": 0, "pattern": pattern}
 
     for name, module in targets:
         for pname, param in module.named_parameters(prefix=name):
@@ -88,7 +95,7 @@ def prune(
                 stats["active_params"] += param.numel()
                 continue
 
-            mask = zeckendorf_mask(param.data, axis=axis, score_fn=score_fn)
+            mask = make_mask(param.data, axis=axis, score_fn=score_fn)
             masks[pname] = mask
 
             # Apply mask
@@ -272,22 +279,27 @@ def _grad_scaler(enabled: bool):
 def check(
     model: nn.Module,
     masks: Dict[str, torch.Tensor],
+    pattern: Optional[str] = None,
 ) -> Dict:
     """
     Verify pruned model integrity.
 
     Checks:
-    1. All masks satisfy the adjacency constraint
+    1. All masks satisfy their pattern (the adjacency constraint by default)
     2. All pruned positions are actually zero
     3. Density statistics
 
     Args:
         model: Pruned model
         masks: Dict of pruning masks
+        pattern: The pattern to validate ("zeckendorf" or "2:4"); None reads
+                 it from the stats prune() attached, else "zeckendorf"
 
     Returns:
         dict with per-layer and aggregate results
     """
+    if pattern is None:
+        pattern = getattr(model, "_zeck_prune_stats", {}).get("pattern", "zeckendorf")
     results = {}
     all_valid = True
     all_zeros_enforced = True
@@ -297,7 +309,7 @@ def check(
             continue
 
         mask = masks[name].to(param.device)
-        ms = mask_stats(mask)
+        ms = mask_stats(mask, pattern=pattern)
 
         # Check pruned positions are zero
         pruned_vals = param.data[~mask.bool()]
@@ -317,6 +329,7 @@ def check(
         "all_masks_valid": all_valid,
         "all_zeros_enforced": all_zeros_enforced,
         "n_layers": len(results) - 1,
+        "pattern": pattern,
     }
 
     return results

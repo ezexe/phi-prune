@@ -42,9 +42,11 @@ def cmd_check(args):
         print("Save with: torch.save({'state_dict': model.state_dict(), 'masks': masks}, path)")
         sys.exit(1)
 
-    from zeckendorf_prune.masks import verify_mask
+    from zeckendorf_prune.masks import get_pattern
 
     masks = data["masks"]
+    kind = data.get("pattern", "zeckendorf")  # checkpoints saved before 2:4 existed are Zeckendorf
+    verify = get_pattern(kind)[1]
     all_valid = True
 
     for name, mask in masks.items():
@@ -57,17 +59,18 @@ def cmd_check(args):
             while pattern.dim() > 1:
                 pattern = pattern[0]
 
-        valid = verify_mask(pattern.numpy())
+        valid = verify(pattern.numpy())
         density = mask.float().mean().item()
         status = "✓" if valid else "✗"
         print(f"  {status} {name}: density={density:.3f} valid={valid}")
         if not valid:
             all_valid = False
 
+    rule = "the adjacency constraint" if kind == "zeckendorf" else f"the {kind} pattern"
     if all_valid:
-        print("\n✓ All masks satisfy the adjacency constraint.")
+        print(f"\n✓ All masks satisfy {rule}.")
     else:
-        print("\n✗ CORRUPTION DETECTED: some masks have adjacent active positions.")
+        print(f"\n✗ CORRUPTION DETECTED: some masks break {rule}.")
     return 0 if all_valid else 1
 
 

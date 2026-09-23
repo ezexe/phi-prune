@@ -30,9 +30,11 @@ def save_checkpoint(
     Includes masks, encoding info, and metadata in a single file.
     Load with: data = torch.load(path); model.load_state_dict(data['state_dict'])
     """
+    pattern = getattr(model, "_zeck_prune_stats", {}).get("pattern", "zeckendorf")
     checkpoint = {
         "state_dict": model.state_dict(),
         "masks": masks,
+        "pattern": pattern,
         "format": "zeckendorf-prune",
         "version": "0.2.1",
     }
@@ -56,7 +58,7 @@ def save_checkpoint(
     # Compute and attach stats
     stats = {}
     for name, mask in masks.items():
-        stats[name] = mask_stats(mask)
+        stats[name] = mask_stats(mask, pattern=pattern)
     checkpoint["prune_stats"] = stats
 
     torch.save(checkpoint, path)

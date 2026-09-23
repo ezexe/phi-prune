@@ -5,7 +5,9 @@ import torch
 import torch.nn as nn
 import pytest
 
-from zeckendorf_prune.masks import zeckendorf_dp, zeckendorf_mask, verify_mask, mask_stats
+from zeckendorf_prune.masks import (
+    zeckendorf_dp, zeckendorf_mask, verify_mask, mask_stats, two_four_mask, verify_two_four,
+)
 from zeckendorf_prune.encoding import FibonacciEncoder
 from zeckendorf_prune.integrity import adjacency_check, simulate_corruption
 from zeckendorf_prune.api import prune, finetune, check
@@ -71,6 +73,30 @@ class TestZeckendorfMask:
             assert len(vals) == 1  # all 0 or all 1
 
 
+# ── 2-of-4 baseline mask ──
+
+class TestTwoFourMask:
+    def test_keeps_top_two_of_every_four(self):
+        w = torch.zeros(8, 2, 3, 3)
+        for c, s in enumerate([1, 5, 3, 2, 9, 1, 1, 8]):
+            w[c] = s
+        mask = two_four_mask(w, axis=0)
+        assert mask.shape == w.shape
+        kept = [int(mask[c].max()) for c in range(8)]
+        assert kept == [0, 1, 1, 0, 1, 0, 0, 1]
+        assert verify_two_four(kept)
+
+    def test_trailing_partial_group_kept_whole(self):
+        mask = two_four_mask(torch.randn(6, 4), axis=0)
+        kept = [int(mask[c].max()) for c in range(6)]
+        assert sum(kept[:4]) == 2 and kept[4:] == [1, 1]
+
+    def test_verify_two_four(self):
+        assert verify_two_four([1, 1, 0, 0, 0, 1, 0, 1])
+        assert not verify_two_four([1, 1, 1, 0])
+        assert not verify_two_four([1, 1, 0, 0, 0, 1])  # a trailing partial group must be kept whole
+
+
 # ── Fibonacci Encoding ──
 
 class TestFibonacciEncoder:
@@ -97,6 +123,16 @@ class TestFibonacciEncoder:
         encoded, scale, rmse = enc.encode_tensor(t)
         assert encoded.shape == t.shape
         assert rmse < 1.0  # quantization error scales with value range
+
+    def test_encode_snaps_to_nearest_level(self):
+        """A value between two grid levels snaps to the nearer one, below as well as above."""
+        enc = FibonacciEncoder(n_digits=10)  # grid: every integer 0..143
+        # 0 and 143 pin the min-max scaling to the identity, so 4.3 and 4.7 reach the grid as-is
+        t = torch.tensor([0.0, 4.3, 4.7, 143.0])
+        encoded, scale, rmse = enc.encode_tensor(t)
+        assert scale == 1.0
+        assert encoded.tolist() == [0.0, 4.0, 5.0, 143.0]
+        assert rmse == pytest.approx(0.3 / np.sqrt(2), abs=1e-6)
 
     def test_stream_roundtrip(self):
         """Encode values to bitstream and decode back."""
@@ -196,6 +232,24 @@ class TestAPI:
         pruned, masks = prune(model, exclude={"0"})
         assert "0.weight" not in masks
         assert "2.weight" in masks
+
+    def test_two_four_pattern(self):
+        """pattern="2:4" keeps 2 of every 4 output channels, and check() validates that pattern."""
+        model = self._make_model()
+        pruned, masks = prune(model, pattern="2:4", layer_types=(nn.Conv2d,))  # density counts convs only
+        assert set(masks) == {"0.weight", "2.weight"}
+        for mask in masks.values():
+            assert verify_two_four(mask.flatten(1).amax(1).tolist())  # one value per output channel
+        assert pruned._zeck_prune_stats["pattern"] == "2:4"
+        assert pruned._zeck_prune_stats["density"] == pytest.approx(0.5)  # 16 and 32 channels: whole groups
+        report = check(pruned, masks)
+        assert report["_summary"]["pattern"] == "2:4"
+        assert report["_summary"]["all_masks_valid"]
+        assert report["_summary"]["all_zeros_enforced"]
+
+    def test_unknown_pattern_rejected(self):
+        with pytest.raises(ValueError, match="Unknown pattern"):
+            prune(self._make_model(), pattern="3:4")
 
     def test_finetune_keeps_pruned_weights_zero(self):
         """amp=True falls back to fp32 off CUDA, so both settings run on any machine."""

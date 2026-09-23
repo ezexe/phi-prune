@@ -97,12 +97,11 @@ class FibonacciEncoder:
         indices = np.searchsorted(self.grid, scaled, side="left")
         indices = np.clip(indices, 0, len(self.grid) - 1)
 
-        # Check if left or right neighbor is closer
-        left = self.grid[indices]
-        right_idx = np.clip(indices + 1, 0, len(self.grid) - 1)
-        right = self.grid[right_idx]
-        use_right = np.abs(scaled - right) < np.abs(scaled - left)
-        quantized = np.where(use_right, right, left)
+        # The nearest grid point is grid[indices] or the one below it
+        upper = self.grid[indices]
+        lower = self.grid[np.maximum(indices - 1, 0)]
+        use_lower = np.abs(scaled - lower) < np.abs(scaled - upper)
+        quantized = np.where(use_lower, lower, upper)
 
         # Scale back
         decoded = (quantized / scale) + offset

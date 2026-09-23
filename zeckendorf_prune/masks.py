@@ -9,6 +9,8 @@ bits per position, guaranteeing ≤50% density.
 Mask selection uses dynamic programming to find the maximum-weight
 independent set under the adjacency constraint — the optimal subset
 of weights to keep, given their magnitudes.
+
+two_four_mask builds the 2-of-4 baseline the constraint is compared against.
 """
 
 import torch
@@ -111,6 +113,43 @@ def zeckendorf_mask(
     return mask
 
 
+def two_four_mask(
+    weight: torch.Tensor,
+    axis: int = 0,
+    score_fn: str = "magnitude",
+) -> torch.Tensor:
+    """
+    Generate a 2-of-4 pruning mask: in every group of 4 consecutive positions
+    along `axis`, keep the 2 with the highest importance.
+
+    The baseline that .docs/experiment/Zeckendorf.py compares the Zeckendorf
+    pattern against. Like zeckendorf_mask, it scores whole slices along `axis`
+    and broadcasts, so for axis=0 it keeps or drops whole output channels —
+    unlike NVIDIA's hardware 2:4 sparsity, which keeps 2 of every 4 weights
+    inside each row. A trailing group shorter than 4 is kept whole.
+
+    Returns:
+        Binary mask tensor, same shape as weight. Ready to multiply.
+    """
+    if score_fn == "magnitude":
+        dims_to_reduce = [d for d in range(weight.dim()) if d != axis]
+        scores = weight.abs().sum(dim=dims_to_reduce) if dims_to_reduce else weight.abs()
+    else:
+        raise ValueError(f"Unknown score function: {score_fn}")
+
+    n = scores.shape[0]
+    mask_1d = torch.ones(n, dtype=weight.dtype, device=weight.device)
+    full = n - n % 4
+    if full:
+        groups = scores[:full].reshape(-1, 4)
+        top2 = groups.topk(2, dim=1).indices
+        mask_1d[:full] = torch.zeros_like(groups, dtype=weight.dtype).scatter_(1, top2, 1.0).reshape(-1)
+
+    shape = [1] * weight.dim()
+    shape[axis] = n
+    return mask_1d.reshape(shape).expand_as(weight)
+
+
 def verify_mask(mask_1d) -> bool:
     """
     Verify that a 1D binary pattern satisfies the Zeckendorf constraint:
@@ -130,9 +169,30 @@ def verify_mask(mask_1d) -> bool:
     return True
 
 
-def mask_stats(mask: torch.Tensor, axis: int = 0) -> dict:
+def verify_two_four(mask_1d) -> bool:
     """
-    Compute statistics for a Zeckendorf mask.
+    Verify that a 1D binary pattern keeps exactly 2 of every full group of 4
+    consecutive positions, and all of a trailing group shorter than 4.
+
+    Args:
+        mask_1d: Iterable of 0s and 1s
+
+    Returns:
+        True if valid, False otherwise
+    """
+    bits = [int(v) for v in mask_1d]
+    full = len(bits) - len(bits) % 4
+    return all(sum(bits[i:i + 4]) == 2 for i in range(0, full, 4)) and all(bits[full:])
+
+
+def mask_stats(mask: torch.Tensor, axis: int = 0, pattern: str = "zeckendorf") -> dict:
+    """
+    Compute statistics for a pruning mask.
+
+    Args:
+        mask: Mask tensor from zeckendorf_mask or two_four_mask
+        axis: Dimension the pattern runs along
+        pattern: Which rule "valid" checks — a key of PATTERNS
 
     Returns:
         dict with density, sparsity, active_count, total_count,
@@ -141,12 +201,12 @@ def mask_stats(mask: torch.Tensor, axis: int = 0) -> dict:
     # Extract 1D pattern along axis
     idx = [0] * mask.dim()
     idx[axis] = slice(None)
-    pattern = mask[tuple(idx)]
-    while pattern.dim() > 1:
-        pattern = pattern[0]
+    pattern_1d = mask[tuple(idx)]
+    while pattern_1d.dim() > 1:
+        pattern_1d = pattern_1d[0]
 
-    active = pattern.sum().item()
-    total = pattern.numel()
+    active = pattern_1d.sum().item()
+    total = pattern_1d.numel()
     density = active / total if total > 0 else 0
 
     return {
@@ -155,5 +215,19 @@ def mask_stats(mask: torch.Tensor, axis: int = 0) -> dict:
         "active_count": int(active),
         "total_count": total,
         "capacity_utilization": density / 0.5 if density > 0 else 0,
-        "valid": verify_mask(pattern.cpu().numpy()),
+        "valid": get_pattern(pattern)[1](pattern_1d.cpu().numpy()),
     }
+
+
+# Mask patterns by name: (mask generator, 1D verifier)
+PATTERNS = {
+    "zeckendorf": (zeckendorf_mask, verify_mask),
+    "2:4": (two_four_mask, verify_two_four),
+}
+
+
+def get_pattern(name: str):
+    """The (mask generator, 1D verifier) pair for a pattern name; ValueError for an unknown one."""
+    if name not in PATTERNS:
+        raise ValueError(f"Unknown pattern {name!r}: expected one of {sorted(PATTERNS)}")
+    return PATTERNS[name]
