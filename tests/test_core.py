@@ -8,7 +8,7 @@ import pytest
 from zeckendorf_prune.masks import zeckendorf_dp, zeckendorf_mask, verify_mask, mask_stats
 from zeckendorf_prune.encoding import FibonacciEncoder
 from zeckendorf_prune.integrity import adjacency_check, simulate_corruption
-from zeckendorf_prune.api import prune, check
+from zeckendorf_prune.api import prune, finetune, check
 
 
 # ── Mask DP ──
@@ -170,5 +170,44 @@ class TestAPI:
 
     def test_density_under_half(self):
         model = self._make_model()
-        pruned, masks = prune(model)
+        pruned, masks = prune(model, prune_head=True)  # every eligible layer pruned, head included
         assert pruned._zeck_prune_stats["density"] <= 0.51  # ≤50% + float tolerance
+
+    def test_head_left_dense_by_default(self):
+        """The last eligible layer (the 10-class head here) keeps every row."""
+        model = self._make_model()
+        pruned, masks = prune(model)
+        assert "6.weight" not in masks
+        assert torch.equal(pruned[6].weight, model[6].weight)
+
+    def test_prune_head_opt_in(self):
+        model = self._make_model()
+        pruned, masks = prune(model, prune_head=True)
+        assert "6.weight" in masks
+
+    def test_exclude_keeps_named_layers_dense(self):
+        model = self._make_model()
+        pruned, masks = prune(model, exclude={"0"})
+        assert "0.weight" not in masks
+        assert "2.weight" in masks
+
+    def test_finetune_keeps_pruned_weights_zero(self):
+        """amp=True falls back to fp32 off CUDA, so both settings run on any machine."""
+        model = self._make_model()
+        pruned, masks = prune(model)
+        batches = [(torch.randn(4, 3, 8, 8), torch.randint(0, 10, (4,))) for _ in range(2)]
+        for amp in (False, True):
+            result = finetune(pruned, batches, epochs=1, masks=masks, val_loader=batches,
+                              verbose=False, amp=amp)
+            assert set(result) == {"history", "best_val_acc", "final_train_acc"}
+            assert check(pruned, masks)["_summary"]["all_zeros_enforced"]
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="fp16 autocast runs on CUDA only")
+    def test_finetune_amp_on_cuda(self):
+        model = self._make_model().cuda()
+        pruned, masks = prune(model)
+        batches = [(torch.randn(4, 3, 8, 8), torch.randint(0, 10, (4,))) for _ in range(2)]
+        result = finetune(pruned, batches, epochs=1, masks=masks, val_loader=batches,
+                          verbose=False, amp=True)
+        assert result["best_val_acc"] is not None
+        assert check(pruned, masks)["_summary"]["all_zeros_enforced"]

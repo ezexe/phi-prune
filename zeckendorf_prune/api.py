@@ -9,7 +9,7 @@ High-level API for Zeckendorf pruning.
 """
 
 import copy
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, Tuple, Optional, List, Iterable
 
 import torch
 import torch.nn as nn
@@ -30,6 +30,8 @@ def prune(
     min_dim: int = 8,
     inplace: bool = False,
     score_fn: str = "magnitude",
+    prune_head: bool = False,
+    exclude: Iterable[str] = (),
 ) -> Tuple[nn.Module, Dict[str, torch.Tensor]]:
     """
     Apply Zeckendorf-constrained pruning to a model.
@@ -46,6 +48,13 @@ def prune(
         min_dim: Skip layers smaller than this along the prune axis
         inplace: If False, works on a deep copy
         score_fn: Weight importance metric ("magnitude")
+        prune_head: Also prune the last eligible layer in registration
+                    order — the classifier head in standard architectures.
+                    Off by default: along axis 0 its positions are the
+                    classes, and the constraint keeps at most half of them,
+                    leaving the rest with a bias-only logit
+        exclude: Module names to leave dense (e.g. {"fc"}), for a head
+                 that is not registered last or any other layer to keep
 
     Returns:
         (pruned_model, masks) where masks maps param names to mask tensors
@@ -53,18 +62,19 @@ def prune(
     if not inplace:
         model = copy.deepcopy(model)
 
+    targets = [(name, m) for name, m in model.named_modules() if isinstance(m, layer_types)]
+    keep_dense = {exclude} if isinstance(exclude, str) else set(exclude)
+    if not prune_head and targets:
+        keep_dense.add(targets[-1][0])
+
     masks = {}
     stats = {"total_params": 0, "active_params": 0, "pruned_layers": 0}
 
-    for name, module in model.named_modules():
-        is_target = isinstance(module, layer_types)
-        if not is_target:
-            continue
-
+    for name, module in targets:
         for pname, param in module.named_parameters(prefix=name):
             if "weight" not in pname:
                 continue
-            if param.shape[axis] < min_dim:
+            if name in keep_dense or param.shape[axis] < min_dim:
                 stats["total_params"] += param.numel()
                 stats["active_params"] += param.numel()
                 continue
@@ -103,6 +113,7 @@ def finetune(
     val_loader=None,
     verbose: bool = True,
     criterion: nn.Module = None,
+    amp: bool = False,
 ) -> Dict:
     """
     Fine-tune a pruned model with mask enforcement.
@@ -120,6 +131,8 @@ def finetune(
         val_loader: Optional validation loader for tracking accuracy
         verbose: Print progress
         criterion: Loss function (default: CrossEntropyLoss)
+        amp: Run forward passes under fp16 autocast with loss scaling
+             (CUDA devices only; elsewhere training stays fp32)
 
     Returns:
         dict with training history and best accuracy
@@ -128,6 +141,7 @@ def finetune(
         device = next(model.parameters()).device
     if criterion is None:
         criterion = nn.CrossEntropyLoss()
+    use_amp = _amp_enabled(amp, device)
 
     model.to(device)
     model.train()
@@ -136,6 +150,12 @@ def finetune(
         model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
     )
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    scaler = _grad_scaler(use_amp)
+    masked = [
+        (param, masks[name].to(param.device))
+        for name, param in model.named_parameters()
+        if masks and name in masks
+    ]
 
     best_acc = 0.0
     best_state = None
@@ -143,46 +163,45 @@ def finetune(
 
     for epoch in range(epochs):
         model.train()
-        total_loss = 0.0
-        correct = 0
+        # Summed on the device and read once per epoch, instead of an .item() sync every step
+        total_loss = torch.zeros((), device=device)
+        correct = torch.zeros((), dtype=torch.long, device=device)
         total = 0
 
         for inputs, targets in train_loader:
             inputs, targets = inputs.to(device), targets.to(device)
 
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            loss.backward()
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+            scaler.scale(loss).backward()
 
             # Enforce masks: zero gradients on pruned positions
-            if masks:
-                for name, param in model.named_parameters():
-                    if name in masks and param.grad is not None:
-                        param.grad.mul_(masks[name].to(param.device))
+            for param, mask in masked:
+                if param.grad is not None:
+                    param.grad.mul_(mask)
 
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             # Re-apply masks to weights (belt and suspenders)
-            if masks:
-                with torch.no_grad():
-                    for name, param in model.named_parameters():
-                        if name in masks:
-                            param.mul_(masks[name].to(param.device))
+            with torch.no_grad():
+                for param, mask in masked:
+                    param.mul_(mask)
 
-            total_loss += loss.item() * inputs.size(0)
-            _, predicted = outputs.max(1)
-            correct += predicted.eq(targets).sum().item()
+            total_loss += loss.detach() * inputs.size(0)
+            correct += outputs.argmax(1).eq(targets).sum()
             total += inputs.size(0)
 
         scheduler.step()
-        train_acc = 100.0 * correct / total
-        avg_loss = total_loss / total
+        train_acc = 100.0 * correct.item() / total
+        avg_loss = total_loss.item() / total
 
         # Validation
         val_acc = None
         if val_loader is not None:
-            val_acc = _evaluate(model, val_loader, device)
+            val_acc = _evaluate(model, val_loader, device, amp=amp)
             if val_acc > best_acc:
                 best_acc = val_acc
                 best_state = copy.deepcopy(model.state_dict())
@@ -210,19 +229,31 @@ def finetune(
     }
 
 
-def _evaluate(model: nn.Module, loader, device: torch.device) -> float:
+def _evaluate(model: nn.Module, loader, device: torch.device, amp: bool = False) -> float:
     """Evaluate accuracy on a data loader."""
     model.eval()
-    correct = 0
+    correct = torch.zeros((), dtype=torch.long, device=device)
     total = 0
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.float16, enabled=_amp_enabled(amp, device)
+    ):
         for inputs, targets in loader:
             inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
-            _, predicted = outputs.max(1)
-            correct += predicted.eq(targets).sum().item()
+            correct += model(inputs).argmax(1).eq(targets).sum()
             total += inputs.size(0)
-    return 100.0 * correct / total
+    return 100.0 * correct.item() / total
+
+
+def _amp_enabled(amp: bool, device) -> bool:
+    """fp16 autocast runs on CUDA devices only; elsewhere amp=True falls back to fp32."""
+    return amp and torch.device(device).type == "cuda"
+
+
+def _grad_scaler(enabled: bool):
+    """torch.amp.GradScaler("cuda") from PyTorch 2.3 on, torch.cuda.amp.GradScaler before it."""
+    if hasattr(torch.amp, "GradScaler"):
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
 # ───────────────────────────────────────────────────────────

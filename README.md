@@ -25,7 +25,7 @@ from zeckendorf_prune import prune, finetune, check
 model, masks = prune(trained_model)
 # → 50% density, adjacency-constrained
 
-# 2. Fine-tune (mask-aware: gradients zeroed on pruned positions)
+# 2. Fine-tune (mask-aware: gradients zeroed on pruned positions; amp=True runs fp16 on CUDA)
 finetune(model, train_loader, epochs=40, masks=masks, val_loader=test_loader)
 
 # 3. Verify
@@ -95,7 +95,9 @@ Free integrity: 32% single-bit-flip detection via adjacency check.
 
 ## How It Works
 
-The Zeckendorf constraint ("no two consecutive 1s") is applied along the output channel axis of each layer. A dynamic programming algorithm finds the maximum-weight independent set — the optimal subset of channels to keep given their magnitudes — subject to this constraint.
+The Zeckendorf constraint ("no two consecutive 1s") is applied along the output channel axis of each layer.
+The last eligible layer — the classifier head in standard architectures — stays dense by default, because along that axis its positions are the classes and the constraint would keep at most half of them (`prune_head=True` prunes it too; `exclude=` keeps any other layer whole).
+A dynamic programming algorithm finds the maximum-weight independent set — the optimal subset of channels to keep given their magnitudes — subject to this constraint.
 
 The same constraint governs the Fibonacci number system: every positive integer has a unique representation as a sum of non-consecutive Fibonacci numbers. Encoding weights in this system enables multiplication via shift-and-add (each Fibonacci number is the sum of two predecessors), and corrupted codewords are detectable by scanning for the forbidden "11" pattern.
 
