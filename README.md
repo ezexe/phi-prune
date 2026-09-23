@@ -103,6 +103,6 @@ All three properties — structured sparsity, efficient arithmetic, free error d
 @software{zeckendorf_prune,
   title={Zeckendorf-Prune: Structured Sparsity via the Adjacency Constraint},
   year={2026},
-  url={https://github.com/ezexe/zeckendorf-prune}
+  url={https://github.com/ezexe/phi-prune}
 }
 ```

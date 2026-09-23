@@ -16,7 +16,7 @@ zeckendorf-prune: Structured sparsity via the adjacency constraint.
     export(pruned_model, masks, "model_sparse.onnx")
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from zeckendorf_prune.api import prune, finetune, check
 from zeckendorf_prune.encoding import FibonacciEncoder
