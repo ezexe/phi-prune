@@ -3,10 +3,10 @@
 Structured sparsity via the Zeckendorf adjacency constraint: **no two adjacent weights active**.
 
 One rule from one matrix (`M = [[1,1],[1,0]]`) gives you:
-- **Pruning** — 50% structured sparsity, competitive with NVIDIA 2:4 (0.50% gap on ResNet-20/CIFAR-10)
-- **Encoding** — Fibonacci-coded weights enable shift-and-add multiplication (86% multiplier area reduction)
-- **Integrity** — Free corruption detection via adjacency check (32% of single-bit flips caught, zero overhead)
-- **Serialization** — Self-delimiting bitstreams, no length headers, analytically optimal compression
+- **Pruning** — About 50% structured sparsity; on ResNet-20/CIFAR-10 it lands 0.50 points behind a mask that keeps 2 of every 4 channels (a channel-level pattern, not NVIDIA's weight-level 2:4)
+- **Encoding** — Weights quantized to Fibonacci-coded levels, meant for shift-and-add multiplication (no such kernel yet; the 86% multiplier-area saving below is an estimate, not a measurement)
+- **Integrity** — Free corruption detection via adjacency check (32% of single-bit flips caught with 8-digit codewords on ResNet-20, 47% with 10-digit ones on ResNet-50; no parity bits)
+- **Serialization** — Self-delimiting bitstreams with no length headers (on ResNet-50 the stream took 10.2 bits per weight, more than the 7.2 bits of a fixed-width code for the same 144 levels)
 
 No NVIDIA hardware required. No sparse tensor cores. The constraint is simple enough for any architecture to exploit.
 
@@ -90,7 +90,7 @@ zeck info model_zeck.pt
 |--------|----------|------|---------|
 | Dense baseline | 91.66% | — | 100% |
 | Zeckendorf pruned | 88.05% | 3.61% | 50.8% |
-| NVIDIA 2:4 pruned | 88.55% | 3.11% | 50.9% |
+| 2 of every 4 channels pruned | 88.55% | 3.11% | 50.9% |
 | Zeckendorf + Fibonacci encoded | 87.45% | 4.21% | 50.8% |
 
 Estimated hardware savings (vs dense binary), not measured: 86% multiplier area and 71% power-delay product, which combine the 50.8% density with the 73% multiplier-area and 43% power-delay-product reductions that DATE 2021 reported for its Fibonacci weight encoding (1 − 0.508 × 0.27 and 1 − 0.508 × 0.57, in `compute_hardware_cost` of [`.docs/experiment/phase1_stacked.py`](.docs/experiment/phase1_stacked.py)).
@@ -108,7 +108,7 @@ In short:
 - Among the V1 models, the bigger the network, the smaller the loss: ResNet-18 goes from 94.81% unpruned to 88.05% pruned (6.8 points), ResNet-152 from 97.47% to 95.28% (2.2 points).
   - Why (likely, not tested here): a bigger network has more channels doing overlapping work, so more is left to cover for the ones pruned away; the trend holds even among the three models retrained at the same batch size (ResNet-18, -34 and -50 lose 6.8, 5.2 and 4.2 points).
 - With torchvision's newer V2 weights, the same retraining leaves the pruned models 15–29 points below their unpruned accuracy: ResNet-101 goes from 97.53% to 68.35%, and ResNet-152, the best of them, from 97.70% to 82.27%.
-  - Why: not established. The pruned V2 models start from the same 10% but climb far more slowly, reaching 47.8%, 39.5% and 58.9% (ResNet-50, -101, -152) after the first retraining epoch, against 85.8%, 91.4% and 92.8% for V1. Two untested explanations: pruning removes more of what the V2 weights rely on, or 5 epochs at this small learning rate are too few for them to recover; a longer or higher-learning-rate retraining would tell them apart.
+  - Why: not established. The pruned V2 models start from the same 10% but climb far more slowly, reaching 47.8%, 39.5% and 58.9% (ResNet-50, -101, -152) after the first retraining epoch, against 85.8%, 91.4% and 92.8% for V1. It is not the Zeckendorf pattern itself: a mask that keeps 2 of every 4 channels leaves ResNet-50 V2 far behind too (see below). Two untested explanations: pruning removes more of what the V2 weights rely on, or 5 epochs at this small learning rate are too few for them to recover; a longer or higher-learning-rate retraining would tell them apart.
 
 | Model | ImageNet weights | Params | Dense | Pruned | Drop (pts) | Conv density | Pruned convs | Minutes |
 |-------|------------------|--------|-------|--------|------------|--------------|--------------|---------|
@@ -126,6 +126,14 @@ Each model starts from torchvision's ImageNet weights with a new 10-class `fc` h
 The learning rate is 0.01 for the dense epochs and 0.001 after pruning at batch 128 (ResNet-18 to ResNet-50), halved along with the batch for ResNet-101 and ResNet-152 at batch 64.
 Dense and Pruned are the best CIFAR-10 test accuracy over each stage's epochs; before fine-tuning, every pruned model scored 10.00%, a single predicted class.
 Minutes is the wall time from the dense fine-tune through the final mask check; ResNet-18 took about a minute per epoch.
+
+### Baseline and encoding (ResNet-50 V2)
+
+A mask that keeps 2 of every 4 neighboring output channels, the baseline of the ResNet-20 experiment, gives the same ResNet-50 V2 a smaller but still large gap: 96.73% unpruned to 78.70% pruned (18.03 points at 50.0% density), against 26.21 points with the Zeckendorf mask, one run each.
+So the V2 gap is not specific to the Zeckendorf pattern.
+Encoding every pruned layer of that model with 10-digit Fibonacci codewords (144 levels per layer, nearest rounding) cost another 6.79 points (78.70% to 71.91%).
+The adjacency check caught 46.7% of simulated single-bit flips in those codewords, and the self-delimiting stream took 10.18 bits per weight, against 7.17 for a fixed-width code of the same 144 levels.
+Both runs come from the notebook at 6f9ef3a on a Colab T4, with the same training setup as the table above.
 
 ## How It Works
 
