@@ -5,8 +5,8 @@
 ```python
 def fib(n):
     if n <= 0: return 0
-    elif n == 1: return 1
-    else: return fib(n-1) + fib(n-2)
+    if n == 1: return 1
+    return fib(n-1) + fib(n-2)
 ```
 
 Every time you go up one number (e.g., from 5 to 6), you aren't just adding one branch—you are re-growing the entire tree from two steps ago as a side branch. (6) contains a full (5) tree on the left and a full (4) tree on the right.
