@@ -18,8 +18,8 @@ print(f"Device: {device}")
 # ── 1. Load pretrained ResNet-18 ──
 print("\n1. Loading pretrained ResNet-18...")
 model = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.DEFAULT)
+model.fc = torch.nn.Linear(512, 10)  # new CIFAR-10 head, set before .to() so it moves to the device too
 model.to(device)
-model.fc = torch.nn.Linear(512, 10)
 model.eval()
 print(f"   {sum(p.numel() for p in model.parameters()):,} parameters")
 
@@ -42,17 +42,14 @@ train_loader = torch.utils.data.DataLoader(
     trainset, batch_size=64, shuffle=True, num_workers=0
 )
 
-# ── 3. Evaluate dense baseline ──
-print("\n3. Dense baseline accuracy...")
-model.eval()
-correct = total = 0
-with torch.no_grad():
-    for imgs, labels in test_loader:
-        imgs, labels = imgs.to(device), labels.to(device)
-        preds = model(imgs).argmax(1)
-        correct += (preds == labels).sum().item()
-        total += labels.size(0)
-dense_acc = 100 * correct / total
+# ── 3. Train the dense baseline ──
+# The new 10-class head starts random, so the untrained model scores ~10% (chance); the baseline
+# pruning is measured against is the dense model after a short fine-tune.
+print("\n3. Training dense baseline (2 epochs)...")
+dense_results = finetune(
+    model, train_loader, epochs=2, lr=0.01, device=device, val_loader=test_loader, verbose=True
+)
+dense_acc = dense_results["best_val_acc"]
 print(f"   Dense: {dense_acc:.2f}%")
 
 # ── 4. Prune ──
@@ -101,7 +98,7 @@ print(f"   Sample layer ({sample_param}): RMSE = {rmse:.6f}")
 
 # ── 9. Summary ──
 print(f"\n{'='*50}")
-print(f"  Dense:              {dense_acc:.2f}%")
+print(f"  Dense (2 ep ft):    {dense_acc:.2f}%")
 print(f"  Pruned (no ft):     {pruned_acc:.2f}%")
 print(f"  Pruned (5 ep ft):   {ft_results['best_val_acc']:.2f}%")
 print(f"  Density:            {stats['density']:.1%}")
