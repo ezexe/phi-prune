@@ -10,12 +10,6 @@ One rule from one matrix (`M = [[1,1],[1,0]]`) gives you:
 
 No NVIDIA hardware required. No sparse tensor cores. The constraint is simple enough for any architecture to exploit.
 
-## Install
-
-```bash
-pip install zeckendorf-prune
-```
-
 ## Quick Start
 
 ```python
