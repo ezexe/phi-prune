@@ -5,8 +5,8 @@ Structured sparsity via the Zeckendorf adjacency constraint: **no two adjacent w
 One rule from one matrix (`M = [[1,1],[1,0]]`) gives you:
 - **Pruning** — About 50% structured sparsity; on ResNet-20/CIFAR-10 it lands 0.50 points behind a mask that keeps 2 of every 4 channels (a channel-level pattern, not NVIDIA's weight-level 2:4)
 - **Encoding** — Weights quantized to Fibonacci-coded levels, meant for shift-and-add multiplication (no such kernel yet; the 86% multiplier-area saving below is an estimate, not a measurement)
-- **Integrity** — Free corruption detection via adjacency check (32% of single-bit flips caught with 8-digit codewords on ResNet-20, 47% with 10-digit ones on ResNet-50; no parity bits)
-- **Serialization** — Self-delimiting bitstreams with no length headers (on ResNet-50 the stream took 10.2 bits per weight, more than the 7.2 bits of a fixed-width code for the same 144 levels)
+- **Integrity** — Free corruption detection via adjacency check (32% of single-bit flips caught with 8-digit codewords on ResNet-20, 46–48% with 10-digit ones on eight larger ResNets; no parity bits)
+- **Serialization** — Self-delimiting bitstreams with no length headers (on eight ResNets the stream took 9.7–10.3 bits per weight, more than the 7.2 bits of a fixed-width code for the same 144 levels)
 
 No NVIDIA hardware required. No sparse tensor cores. The constraint is simple enough for any architecture to exploit.
 
@@ -127,13 +127,31 @@ The learning rate is 0.01 for the dense epochs and 0.001 after pruning at batch 
 Dense and Pruned are the best CIFAR-10 test accuracy over each stage's epochs; before fine-tuning, every pruned model scored 10.00%, a single predicted class.
 Minutes is the wall time from the dense fine-tune through the final mask check; ResNet-18 took about a minute per epoch.
 
-### Baseline and encoding (ResNet-50 V2)
+### Baseline and encoding
 
 A mask that keeps 2 of every 4 neighboring output channels, the baseline of the ResNet-20 experiment, gives the same ResNet-50 V2 a smaller but still large gap: 96.73% unpruned to 78.70% pruned (18.03 points at 50.0% density), against 26.21 points with the Zeckendorf mask, one run each.
 So the V2 gap is not specific to the Zeckendorf pattern.
-Encoding every pruned layer of that model with 10-digit Fibonacci codewords (144 levels per layer, nearest rounding) cost another 6.79 points (78.70% to 71.91%).
-The adjacency check caught 46.7% of simulated single-bit flips in those codewords, and the self-delimiting stream took 10.18 bits per weight, against 7.17 for a fixed-width code of the same 144 levels.
-Both runs come from the notebook at 6f9ef3a on a Colab T4, with the same training setup as the table above.
+Encoding every pruned layer with 10-digit Fibonacci codewords (144 levels per layer, nearest rounding) costs well under a point on the V1 models and several points on the V2 ones:
+
+| Model | ImageNet weights | Pruned | Encoded | Cost (pts) |
+|-------|------------------|--------|---------|------------|
+| ResNet-34 | V1 | 91.03% | 90.58% | 0.45 |
+| ResNet-50 | V1 | 91.80% | 91.25% | 0.55 |
+| ResNet-101 | V1 | 94.21% | 93.93% | 0.28 |
+| ResNet-152 | V1 | 95.28% | 94.96% | 0.32 |
+| ResNet-50 | V2 | 70.48% | 64.94% | 5.54 |
+| ResNet-50 | V2, 2 of every 4 channels | 78.70% | 71.91% | 6.79 |
+| ResNet-101 | V2 | 68.36% | 63.90% | 4.46 |
+| ResNet-152 | V2 | 82.23% | 10.00% | 72.23 |
+
+What these numbers mean:
+
+- Encoding stores each surviving weight as one of 144 Fibonacci-coded levels instead of a full 32-bit number; on the V1 models that costs well under a point of accuracy, on the V2 ones 4–7 points.
+- After encoding, ResNet-152 V2 scores 10.00%, exactly what answering the same class for every image scores on CIFAR-10's ten equally common classes; why encoding breaks this one model is not known yet.
+- Pruned here is measured again from each saved file rather than copied from training, so it can differ from the main table by up to 0.04 points.
+- Flips caught: when one random stored bit is flipped, the flip lands next to another 1 about half the time (46–48% here), and the adjacency check spots it with no extra storage; the other half go unnoticed.
+- Stream size: the Fibonacci stream marks where each weight ends, so it needs no length fields, but at 9.7–10.3 bits per weight it is 35–45% larger than a plain fixed-size code for the same 144 levels (7.17 bits); it buys that marking and the flip check, not smaller files.
+- Source: the notebook at commit 6f9ef3a, run on a Colab T4 with the same training setup as the main table.
 
 ## How It Works
 
