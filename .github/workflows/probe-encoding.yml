@@ -1,0 +1,41 @@
+name: probe-encoding
+
+# Manual run of scripts/probe_pretrained_encoding.py on ImageNet-pretrained
+# ResNets (GitHub runners can download torchvision weights and CIFAR-10).
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "comma-separated arch:weights pairs"
+        default: "resnet152:IMAGENET1K_V2,resnet152:IMAGENET1K_V1,resnet50:IMAGENET1K_V2"
+      images:
+        description: "CIFAR-10 test images (fp32)"
+        default: "64"
+      fp16_images:
+        description: "of which run under fp16 autocast"
+        default: "32"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (CPU torch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .
+      - name: Probe
+        run: >
+          python scripts/probe_pretrained_encoding.py
+          --models "${{ inputs.models }}"
+          --images "${{ inputs.images }}"
+          --fp16-images "${{ inputs.fp16_images }}"
+          | tee probe.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-results
+          path: probe.txt
