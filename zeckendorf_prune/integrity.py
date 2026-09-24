@@ -5,8 +5,11 @@ Detect weight corruption by checking the Zeckendorf adjacency constraint.
 A single-bit flip that creates consecutive 1s in any codeword is caught
 for free — no parity bits, no CRC, just a scan for '11'.
 
-Detection rate: ~32% of random single-bit flips (empirical on 8-digit codes).
-Rate increases with codeword width.
+Detection rate: ~46-48% of random single-bit flips on pretrained ResNets
+(10-digit codes), and 41-52% on synthetic weights at 8 or 10 digits,
+depending on the weight distribution. Averaged over all grid levels it is
+~41-42% and barely moves with codeword width. Only 0 -> 1 flips next to a
+set bit are caught. scripts/measure_detection.py reproduces these figures.
 """
 
 import torch
