@@ -217,7 +217,7 @@ def finetune(
         # Validation
         val_acc = None
         if val_loader is not None:
-            val_acc = _evaluate(model, val_loader, device, amp=amp)
+            val_acc = evaluate(model, val_loader, device, amp=amp)
             if val_acc > best_acc:
                 best_acc = val_acc
                 best_state = copy.deepcopy(model.state_dict())
@@ -245,17 +245,42 @@ def finetune(
     }
 
 
-def _evaluate(model: nn.Module, loader, device: torch.device, amp: bool = False) -> float:
-    """Evaluate accuracy on a data loader."""
+def evaluate(
+    model: nn.Module,
+    loader,
+    device: Optional[torch.device] = None,
+    amp: bool = False,
+    fp32_fallback: bool = True,
+) -> float:
+    """
+    Top-1 accuracy (%) of a model on a data loader.
+
+    Args:
+        model: Model to evaluate (put in eval mode)
+        loader: Yields (inputs, targets) batches
+        device: Compute device (default: the model's)
+        amp: Run forward passes under fp16 autocast (CUDA devices only)
+        fp32_fallback: Under amp, re-run in fp32 any batch whose fp16
+                       logits are not all finite. Activations past fp16's
+                       range (65504) turn logits into inf/NaN, and argmax
+                       over a NaN row picks class 0, so without this an
+                       encoded model that overflows fp16 scores chance
+                       level on a balanced test set
+    """
+    if device is None:
+        device = next(model.parameters()).device
+    use_amp = _amp_enabled(amp, device)
     model.eval()
     correct = torch.zeros((), dtype=torch.long, device=device)
     total = 0
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.float16, enabled=_amp_enabled(amp, device)
-    ):
+    with torch.no_grad():
         for inputs, targets in loader:
             inputs, targets = inputs.to(device), targets.to(device)
-            correct += model(inputs).argmax(1).eq(targets).sum()
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
+                logits = model(inputs)
+            if use_amp and fp32_fallback and not torch.isfinite(logits).all():
+                logits = model(inputs)
+            correct += logits.argmax(1).eq(targets).sum()
             total += inputs.size(0)
     return 100.0 * correct.item() / total
 

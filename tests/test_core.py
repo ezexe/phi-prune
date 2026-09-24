@@ -12,7 +12,7 @@ from zeckendorf_prune.masks import (
 )
 from zeckendorf_prune.encoding import FibonacciEncoder
 from zeckendorf_prune.integrity import adjacency_check, simulate_corruption
-from zeckendorf_prune.api import prune, finetune, check
+from zeckendorf_prune.api import prune, finetune, check, evaluate
 from zeckendorf_prune.export import export_bitstream, load_bitstream
 
 
@@ -316,6 +316,33 @@ class TestAPI:
                           verbose=False, amp=True)
         assert result["best_val_acc"] is not None
         assert check(pruned, masks)["_summary"]["all_zeros_enforced"]
+
+    @pytest.mark.filterwarnings("ignore:CUDA is not available")  # amp forced on without CUDA
+    def test_evaluate_reruns_non_finite_amp_batches_in_fp32(self, monkeypatch):
+        """A batch whose fp16 logits overflow is re-run in fp32, not scored as class 0."""
+        import zeckendorf_prune.api as api
+
+        class OverflowsOnce(nn.Module):
+            """Right on every call except the first, which returns NaN like an fp16 overflow."""
+            def __init__(self):
+                super().__init__()
+                self.w = nn.Parameter(torch.zeros(1))
+                self.calls = 0
+
+            def forward(self, x):
+                self.calls += 1
+                logits = torch.nn.functional.one_hot(x.long(), 10).float()
+                return torch.full_like(logits, float("nan")) if self.calls == 1 else logits
+
+        targets = torch.tensor([3, 7, 7, 9])
+        batches = [(targets, targets)]  # the model echoes its input as the predicted class
+        monkeypatch.setattr(api, "_amp_enabled", lambda amp, device: amp)
+
+        assert evaluate(OverflowsOnce(), batches, amp=True) == 100.0
+        assert evaluate(OverflowsOnce(), batches, amp=True, fp32_fallback=False) == 0.0
+        model = OverflowsOnce()
+        evaluate(model, batches, amp=False)
+        assert model.calls == 1  # no re-run without amp
 
 
 # ── Export ──

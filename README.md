@@ -44,6 +44,9 @@ for name, param in model.named_parameters():
         scales[name] = (scale, offset)
 # → Weights are now sums of non-consecutive Fibonacci numbers
 # → Multiplication = shift-and-add (no multiplier needed)
+
+from zeckendorf_prune import evaluate
+acc = evaluate(model, test_loader, amp=True)  # fp16 on CUDA; batches whose logits overflow re-run in fp32
 ```
 
 ## Integrity Checking
