@@ -131,6 +131,59 @@ def probe(arch, weights, x, x16, batch, digits):
     return rows, worst_dense, worst_pruned
 
 
+def encode_strategy(model, encoder, strategy):
+    """
+    Encode every conv weight of model in place with one quantization strategy.
+
+    tensor      one (scale, offset) per layer, as encode_tensor does today
+    channel     one (scale, offset) per output channel
+    clipP       per layer, after clamping weights to their [100-P, P] percentiles
+    Returns the per-layer relative errors.
+    """
+    errs = []
+    with torch.no_grad():
+        for m in model.modules():
+            if not isinstance(m, nn.Conv2d):
+                continue
+            w = m.weight.data
+            orig = w.clone()
+            if strategy == "tensor":
+                w.copy_(encoder.encode_tensor(w)[0])
+            elif strategy == "channel":
+                for c in range(w.shape[0]):
+                    w[c].copy_(encoder.encode_tensor(w[c])[0])
+            elif strategy.startswith("clip"):
+                p = float(strategy[4:]) / 100
+                flat = w.flatten().double()
+                lo, hi = torch.quantile(flat, 1 - p).item(), torch.quantile(flat, p).item()
+                w.copy_(encoder.encode_tensor(w.clamp(lo, hi))[0])
+            else:
+                raise ValueError(strategy)
+            errs.append(((w - orig).norm() / orig.norm().clamp_min(1e-30)).item())
+    return errs
+
+
+def compare_strategies(specs, strategies, x, batch, digits):
+    import torchvision
+
+    enc = FibonacciEncoder(digits)
+    for spec in specs:
+        arch, weights = spec.split(":")
+        dense = torchvision.models.get_model(arch, weights=weights).eval()
+        ref = run(dense, x, batch, False)
+        print(f"{arch} {weights}: dense+encoded vs dense, fp32, {len(x)} images")
+        print(f"  {'strategy':<11}{'agree':>8}{'logit rel err':>15}{'mean layer err':>16}{'worst':>8}")
+        for s in strategies:
+            m = copy.deepcopy(dense)
+            errs = encode_strategy(m, enc, s)
+            out = run(m, x, batch, False)
+            agree = (out.argmax(1) == ref.argmax(1)).float().mean().item()
+            lerr = ((out - ref).norm() / ref.norm()).item()
+            print(f"  {s:<11}{agree:>8.1%}{lerr:>15.3f}{sum(errs) / len(errs):>16.4f}{max(errs):>8.4f}",
+                  flush=True)
+        print()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--models", default="resnet152:IMAGENET1K_V2,resnet152:IMAGENET1K_V1",
@@ -142,10 +195,16 @@ def main():
     ap.add_argument("--digits", type=int, default=10)
     ap.add_argument("--data", default="./data")
     ap.add_argument("--fake-data", action="store_true", help="random images (offline smoke test)")
+    ap.add_argument("--strategies", default="",
+                    help="instead of the fp16 probe, compare quantization strategies on the dense "
+                         "models, e.g. tensor,channel,clip99.9")
     args = ap.parse_args()
 
     torch.manual_seed(0)
     x = cifar_images(args.data, args.images, args.img_size, args.fake_data)
+    if args.strategies:
+        compare_strategies(args.models.split(","), args.strategies.split(","), x, args.batch, args.digits)
+        return
     x16 = x[:args.fp16_images]
     print(f"{len(x)} images at {args.img_size} px ({len(x16)} in fp16), "
           f"{args.digits}-digit codewords, {torch.get_num_threads()} threads\n")
