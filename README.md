@@ -5,7 +5,7 @@ Structured sparsity via the Zeckendorf adjacency constraint: **no two adjacent w
 One rule from one matrix (`M = [[1,1],[1,0]]`) gives you:
 - **Pruning** — About 50% structured sparsity; on ResNet-20/CIFAR-10 it lands 0.50 points behind a mask that keeps 2 of every 4 channels (a channel-level pattern, not NVIDIA's weight-level 2:4)
 - **Encoding** — Weights quantized to Fibonacci-coded levels, meant for shift-and-add multiplication (no such kernel yet; the 86% multiplier-area saving below is an estimate, not a measurement)
-- **Integrity** — Free corruption detection via adjacency check (32% of single-bit flips caught with 8-digit codewords on ResNet-20, 46–48% with 10-digit ones on eight larger ResNets; no parity bits)
+- **Integrity** — Free corruption detection via adjacency check (32% of single-bit flips caught with the original experiment's 8-digit sign-magnitude codewords on ResNet-20, 46–48% with this package's 10-digit codewords on eight larger ResNets; no parity bits)
 - **Serialization** — Self-delimiting bitstreams with no length headers (on eight ResNets the stream took 9.7–10.3 bits per weight, more than the 7.2 bits of a fixed-width code for the same 144 levels)
 
 No NVIDIA hardware required. No sparse tensor cores. The constraint is simple enough for any architecture to exploit.
@@ -95,7 +95,7 @@ zeck info model_zeck.pt
 
 Estimated hardware savings (vs dense binary), not measured: 86% multiplier area and 71% power-delay product, which combine the 50.8% density with the 73% multiplier-area and 43% power-delay-product reductions that DATE 2021 reported for its Fibonacci weight encoding (1 − 0.508 × 0.27 and 1 − 0.508 × 0.57, in `compute_hardware_cost` of [`.docs/experiment/phase1_stacked.py`](.docs/experiment/phase1_stacked.py)).
 That paper's encoding keeps weights whose binary form has no two adjacent 1s, while this package stores Zeckendorf digits, for which no circuit cost has been estimated.
-Free integrity: 32% single-bit-flip detection via adjacency check.
+Free integrity: 32% single-bit-flip detection via adjacency check, with the experiment's 8-digit sign-magnitude codewords (`abs(round(w / scale))`), which put most weights on the lowest levels. The package encodes `(w - min) * scale` instead and catches more; see below.
 
 ## Benchmark Results (ResNets, CIFAR-10 at 224 px, Colab T4)
 

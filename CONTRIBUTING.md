@@ -8,7 +8,7 @@ After pruning, Fibonacci-encode the surviving weights. Each weight becomes a sum
 
 **C. Safety-critical inference — free corruption detection**
 
-Automotive, medical, aerospace. Radiation causes single-event upsets that flip bits in weight SRAM. Load a Fibonacci-encoded checkpoint, and on every weight read, scan for adjacent 1s. If found, the weight is corrupted. No CRC, no ECC overhead — just one bitwise check. Catches 32% of single-bit flips for free. Layer lightweight ECC on top for the remaining 68% and your total protection cost drops.
+Automotive, medical, aerospace. Radiation causes single-event upsets that flip bits in weight SRAM. Load a Fibonacci-encoded checkpoint, and on every weight read, scan for adjacent 1s. If found, the weight is corrupted. No CRC, no ECC overhead — just one bitwise check. Catches 46–48% of single-bit flips for free on pretrained ResNets (32% with the sign-magnitude codes of the original experiment). Layer lightweight ECC on top for the rest and your total protection cost drops.
 
 **D. Model distribution — smaller downloads, self-framing streams**
 

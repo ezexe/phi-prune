@@ -10,6 +10,9 @@ Detection rate: ~46-48% of random single-bit flips on pretrained ResNets
 depending on the weight distribution. Averaged over all grid levels it is
 ~41-42% and barely moves with codeword width. Only 0 -> 1 flips next to a
 set bit are caught. scripts/measure_detection.py reproduces these figures.
+The ~32% once quoted here came from the experiment in .docs/experiment,
+which stores sign and magnitude (abs(round(w / scale))), putting most
+weights on the lowest levels, where fewer flips land next to a set bit.
 """
 
 import torch
