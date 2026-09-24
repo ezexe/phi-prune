@@ -127,7 +127,9 @@ def export_bitstream(
     layers' n_active counts split the levels in payload order.
 
     scales maps each parameter name to (scale, offset), the pair
-    encode_tensor returns with return_offset=True. The offset is the
+    encode_tensor returns with return_offset=True: floats, or with
+    axis=... per-slice arrays, which the header stores flattened with
+    their shape as scale_shape. The offset is the
     layer's smallest kept weight, which encode_tensor maps to level 0
     and leaves unchanged, so a caller holding only the 3-value result
     can take param.data[mask.bool()].min().item() before or after
@@ -155,23 +157,19 @@ def export_bitstream(
         if name not in masks or name not in scales:
             continue
 
-        mask = masks[name]
         scale, offset = scales[name]
-        active = param.data[mask.bool()].cpu().numpy()
+        layer_levels = encoder.levels(param.data, scale, offset, masks[name]).tolist()
 
-        layer_levels = []
-        for val in active:
-            grid_val = round((val - offset) * scale)
-            grid_val = max(0, min(grid_val, encoder.max_value))
-            layer_levels.append(int(grid_val))
-
-        header["layers"].append({
-            "name": name,
-            "shape": list(param.shape),
-            "n_active": len(layer_levels),
-            "scale": float(scale),
-            "offset": float(offset),
-        })
+        layer = {"name": name, "shape": list(param.shape), "n_active": len(layer_levels)}
+        if np.ndim(scale) == 0:
+            layer.update(scale=float(scale), offset=float(offset))
+        else:  # per-slice pairs from encode_tensor(axis=...), flattened, with their shape
+            layer.update(
+                scale=np.asarray(scale, dtype=np.float64).ravel().tolist(),
+                offset=np.asarray(offset, dtype=np.float64).ravel().tolist(),
+                scale_shape=list(np.shape(scale)),
+            )
+        header["layers"].append(layer)
         all_levels.extend(layer_levels)
 
     bitstream = encoder.encode_to_stream(all_levels)
@@ -234,14 +232,23 @@ def load_bitstream(
         keep = masks[layer["name"]].bool().to(param.device)
         if list(param.shape) != layer["shape"] or int(keep.sum()) != layer["n_active"]:
             raise ValueError(f"{path}: layer {layer['name']} does not match the model's shape or mask")
-        targets.append((param, keep, layer))
+        scale = np.asarray(layer["scale"], dtype=np.float64)
+        offset = np.asarray(layer["offset"], dtype=np.float64)
+        if "scale_shape" in layer:  # per-slice pairs: one value per weight, in mask order
+            try:
+                keep_np = keep.cpu().numpy()
+                scale = np.broadcast_to(scale.reshape(layer["scale_shape"]), param.shape)[keep_np]
+                offset = np.broadcast_to(offset.reshape(layer["scale_shape"]), param.shape)[keep_np]
+            except ValueError:
+                raise ValueError(f"{path}: layer {layer['name']}'s scale_shape does not fit its shape") from None
+        targets.append((param, keep, layer, scale, offset))
 
     start = 0
-    for param, keep, layer in targets:
+    for param, keep, layer, scale, offset in targets:
         n_active = layer["n_active"]
         # encode_tensor's scale-back arithmetic, so encoded weights come back bit for bit
         layer_levels = np.asarray(levels[start:start + n_active], dtype=np.float64)
-        decoded = layer_levels / layer["scale"] + layer["offset"]
+        decoded = layer_levels / scale + offset
         param.data[keep] = torch.tensor(decoded, dtype=param.dtype, device=param.device)
         start += n_active
     return header

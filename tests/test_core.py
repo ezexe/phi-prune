@@ -152,6 +152,28 @@ class TestFibonacciEncoder:
         assert enc.encode_tensor(torch.full((4,), 0.25), return_offset=True)[3] == 0.25
         assert enc.encode_tensor(t, mask=torch.zeros_like(t), return_offset=True)[3] == 0.0
 
+    def test_encode_per_channel(self):
+        """axis= encodes each slice as encode_tensor would alone, with broadcastable scale/offset."""
+        enc = FibonacciEncoder(n_digits=8)
+        torch.manual_seed(0)
+        t = torch.randn(6, 5, 3)
+        t[0, 0, 0] = 40.0  # one outlier would stretch a whole-tensor range
+        mask = torch.ones_like(t)
+        mask[3] = 0  # a fully pruned channel
+        encoded, scale, rmse, offset = enc.encode_tensor(t, mask=mask, return_offset=True, axis=0)
+        assert scale.shape == offset.shape == (6, 1, 1)
+        for c in range(6):
+            alone, s, _, o = enc.encode_tensor(t[c], mask=mask[c], return_offset=True)
+            assert torch.equal(encoded[c], alone) and scale[c].item() == s and offset[c].item() == o
+        assert torch.equal(encoded[3], t[3]) and (scale[3].item(), offset[3].item()) == (1.0, 0.0)
+        # Every kept channel's minimum lands on level 0, and levels() inverts the scale-back
+        levels = enc.levels(encoded, scale, offset, mask).reshape(5, -1)
+        assert (levels.min(axis=1) == 0).all() and levels.max() <= enc.max_value
+        # Per channel, the outlier no longer coarsens the other channels
+        assert rmse < enc.encode_tensor(t, mask=mask)[2] / 2
+        # Any axis, negative ones included
+        assert enc.encode_tensor(t, axis=-1, return_offset=True)[1].shape == (1, 1, 3)
+
     def test_stream_roundtrip(self):
         """Encode values to bitstream and decode back."""
         enc = FibonacciEncoder(n_digits=8)
@@ -348,7 +370,7 @@ class TestAPI:
 # ── Export ──
 
 class TestExport:
-    def _encoded_model(self):
+    def _encoded_model(self, axis=None):
         """A pruned MLP with its masked layers encoded in place, plus their (scale, offset) scales."""
         model = nn.Sequential(nn.Linear(16, 32), nn.ReLU(), nn.Linear(32, 16), nn.ReLU(), nn.Linear(16, 10))
         pruned, masks = prune(model)
@@ -357,7 +379,7 @@ class TestExport:
         for name, param in pruned.named_parameters():
             if name in masks:
                 encoded, scale, _, offset = enc.encode_tensor(param.data, mask=masks[name],
-                                                              return_offset=True)
+                                                              return_offset=True, axis=axis)
                 param.data.copy_(encoded)
                 scales[name] = (scale, offset)
         return pruned, masks, enc, scales
@@ -389,9 +411,10 @@ class TestExport:
                      for cw in FibonacciEncoder.parse_bitstream(payload, width)]
         assert recovered == expected
 
-    def test_load_bitstream_restores_encoded_weights(self, tmp_path):
+    @pytest.mark.parametrize("axis", [None, 0])
+    def test_load_bitstream_restores_encoded_weights(self, tmp_path, axis):
         """load_bitstream writes the decoded weights back into the masked positions, bit for bit."""
-        pruned, masks, enc, scales = self._encoded_model()
+        pruned, masks, enc, scales = self._encoded_model(axis)
         path = str(tmp_path / "model.zeck")
         export_bitstream(pruned, masks, enc, scales, path)
 
@@ -403,6 +426,15 @@ class TestExport:
         assert [layer["name"] for layer in header["layers"]] == list(masks)
         for (name, before), after in zip(pruned.named_parameters(), restored.parameters()):
             assert torch.equal(before, after), name
+
+    def test_per_channel_passes_integrity_check(self):
+        """cassini_check reads per-channel (scale, offset) arrays: clean encoded weights all pass."""
+        from zeckendorf_prune.integrity import cassini_check
+
+        pruned, masks, enc, scales = self._encoded_model(axis=0)
+        report = cassini_check(pruned, masks, enc, scales)["_aggregate"]
+        assert report["total"] == sum(int(m.sum()) for m in masks.values())
+        assert report["failed"] == 0
 
     def test_load_bitstream_refusals(self, tmp_path):
         """load_bitstream refuses an old header, a short payload or a misfit mask, and writes nothing."""

@@ -52,22 +52,17 @@ def check_tensor_integrity(
         tensor: Weight tensor with Fibonacci-encoded values
         mask: Binary pruning mask
         encoder: FibonacciEncoder instance used for encoding
-        scale: Scale factor from encoding
-        offset: Offset from encoding
+        scale: Scale factor from encoding (a float, or the per-slice
+               array encode_tensor(axis=...) returns)
+        offset: Offset from encoding, in the same form as scale
 
     Returns:
         dict with pass_count, fail_count, total, pass_rate
     """
-    active = tensor[mask.bool()].cpu().numpy()
     passed = 0
     failed = 0
 
-    for val in active:
-        # Map back to grid space
-        grid_val = round((val - offset) * scale)
-        grid_val = max(0, min(grid_val, encoder.max_value))
-
-        # Get codeword
+    for grid_val in encoder.levels(tensor, scale, offset, mask):
         cw = encoder.to_codeword(int(grid_val))
 
         if adjacency_check(cw):
@@ -140,21 +135,15 @@ def simulate_corruption(
     """
     import random
 
-    active_indices = mask.bool().nonzero(as_tuple=False)
-    if len(active_indices) == 0:
+    levels = encoder.levels(tensor, scale, offset, mask)
+    if len(levels) == 0:
         return 0, 0
 
     detected = 0
 
     for _ in range(n_flips):
-        # Pick random active weight
-        idx = tuple(active_indices[random.randrange(len(active_indices))].tolist())
-        val = tensor[idx].item()
-
-        # Map to grid and get codeword
-        grid_val = round((val - offset) * scale)
-        grid_val = max(0, min(grid_val, encoder.max_value))
-        cw = encoder.to_codeword(int(grid_val))
+        # Pick random active weight and get its codeword
+        cw = encoder.to_codeword(int(levels[random.randrange(len(levels))]))
 
         # Flip a random bit
         bit_pos = random.randrange(len(cw))

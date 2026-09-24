@@ -71,7 +71,7 @@ def cifar_batches(root, batch, size, device, limit=None):
     return batches
 
 
-def encode_model(net, masks, encoder):
+def encode_model(net, masks, encoder, axis=None):
     """A copy of net with every masked layer Fibonacci-encoded, and per-layer error stats."""
     enc = copy.deepcopy(net)
     params = dict(enc.named_parameters())
@@ -82,16 +82,19 @@ def encode_model(net, masks, encoder):
             mask = mask.to(p.device)
             keep = mask.bool()
             w = p[keep].double()
-            encoded, scale, _ = encoder.encode_tensor(p.data, mask=mask)
+            encoded, scale, _ = encoder.encode_tensor(p.data, mask=mask, axis=axis)
             p.copy_(encoded)
             err = p[keep].double() - w
             std = w.std().item() if w.numel() > 1 else 0.0
             std = std or 1.0
+            # coarsest step among kept weights (fully pruned channels carry a placeholder scale of 1)
+            scales = torch.as_tensor(scale, dtype=torch.float64).expand(p.shape)[keep.cpu()]
+            step = float((1.0 / scales).max()) if scales.numel() else 0.0
             stats.append({
                 "layer": name,
                 "rel_err": (err.norm() / w.norm().clamp_min(1e-30)).item(),
                 "shift": err.mean().item() / std,
-                "step": (1.0 / scale if scale else 0.0) / std,
+                "step": step / std,
                 "peak": w.abs().max().item() / std,
             })
     return enc, stats
@@ -138,12 +141,15 @@ def main():
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--limit", type=int, help="evaluate only the first N test images")
     ap.add_argument("--top", type=int, default=10, help="layers to list by encoding error")
+    ap.add_argument("--per-channel", action="store_true",
+                    help="a scale and offset per output channel (the notebook's default from 0.2.3); "
+                         "without it one per layer, as the README's encoding table was measured")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net, masks, arch = load_checkpoint(args.checkpoint, args.arch)
     net = net.to(device, memory_format=torch.channels_last)
-    enc, stats = encode_model(net, masks, FibonacciEncoder(args.digits))
+    enc, stats = encode_model(net, masks, FibonacciEncoder(args.digits), axis=0 if args.per_channel else None)
     batches = cifar_batches(args.data, args.batch, args.img_size, device, args.limit)
     report(arch, net, enc, stats, batches, device.type == "cuda", args.top)
 

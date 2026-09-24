@@ -9,7 +9,7 @@ provides self-delimiting bitstreams for serialization.
 
 import torch
 import numpy as np
-from typing import Tuple, Dict, Union
+from typing import Tuple, Dict, Union, Optional
 
 
 # Pre-compute Fibonacci sequence
@@ -61,6 +61,7 @@ class FibonacciEncoder:
         mask: torch.Tensor = None,
         *,
         return_offset: bool = False,
+        axis: Optional[int] = None,
     ) -> Union[Tuple[torch.Tensor, float, float], Tuple[torch.Tensor, float, float, float]]:
         """
         Quantize a weight tensor to the Fibonacci grid.
@@ -76,6 +77,16 @@ class FibonacciEncoder:
                 level 0. (scale, offset) is the per-layer pair that
                 export_bitstream, save_checkpoint and cassini_check take
                 in scales
+            axis: Give each slice along this axis (0 = output channels)
+                its own scale and offset instead of one for the whole
+                tensor. One range per tensor spends most of the levels
+                on a few outliers when weights are heavy-tailed: encoding
+                torchvision's ResNet V2 ImageNet weights that way changes
+                the top-1 class of every probed image, per channel keeps
+                88-95% of them (scripts/probe_pretrained_encoding.py).
+                scale and offset then come back as float64 arrays shaped
+                to broadcast against tensor (size 1 except along axis),
+                so (w - offset) * scale works as with the scalar pair
 
         Returns:
             (encoded_tensor, scale_factor, rmse), with the offset as a
@@ -83,6 +94,9 @@ class FibonacciEncoder:
         """
         def out(encoded, scale, rmse, offset):
             return (encoded, scale, rmse, offset) if return_offset else (encoded, scale, rmse)
+
+        if axis is not None:
+            return out(*self._encode_per_slice(tensor, mask, axis))
 
         if mask is not None:
             active = tensor[mask.bool()]
@@ -126,6 +140,46 @@ class FibonacciEncoder:
             result = torch.tensor(decoded, dtype=tensor.dtype, device=tensor.device).reshape(tensor.shape)
 
         return out(result, scale, rmse, offset)
+
+    def _encode_per_slice(self, tensor, mask, axis):
+        """encode_tensor on each slice along axis; (encoded, scale, rmse, offset)."""
+        axis = axis % tensor.dim()
+        n = tensor.shape[axis]
+        shape = [1] * tensor.dim()
+        shape[axis] = n
+        scale = np.ones(n, dtype=np.float64)
+        offset = np.zeros(n, dtype=np.float64)
+        result = tensor.clone()
+        sq_err, count = 0.0, 0
+        for i in range(n):
+            sl = tensor.select(axis, i)
+            m = None if mask is None else mask.select(axis, i)
+            encoded, scale[i], rmse, offset[i] = self.encode_tensor(sl, m, return_offset=True)
+            result.select(axis, i).copy_(encoded)
+            k = sl.numel() if m is None else int(m.bool().sum())
+            sq_err += rmse ** 2 * k
+            count += k
+        rmse = float(np.sqrt(sq_err / count)) if count else 0.0
+        return result, scale.reshape(shape), rmse, offset.reshape(shape)
+
+    def levels(self, tensor: torch.Tensor, scale, offset, mask: torch.Tensor = None) -> np.ndarray:
+        """
+        Grid levels of an encoded tensor's kept weights, in mask order.
+
+        Inverts encode_tensor's scale-back: round((w - offset) * scale),
+        clamped to [0, max_value]. scale and offset are the scalars or
+        the broadcastable per-slice arrays encode_tensor returned.
+
+        Returns:
+            int64 array, one level per position where mask is set (every
+            position when mask is None), in row-major order
+        """
+        w = tensor.detach().cpu().double().numpy()
+        grid = np.round((w - np.asarray(offset, dtype=np.float64)) * np.asarray(scale, dtype=np.float64))
+        grid = np.broadcast_to(grid, w.shape)
+        if mask is not None:
+            grid = grid[mask.detach().cpu().bool().numpy()]
+        return np.clip(grid, 0, self.max_value).astype(np.int64).ravel()
 
     def to_codeword(self, grid_value: int) -> list:
         """
