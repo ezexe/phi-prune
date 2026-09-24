@@ -150,7 +150,7 @@ Encoding every pruned layer with 10-digit Fibonacci codewords (144 levels per la
 What these numbers mean:
 
 - Encoding stores each surviving weight as one of 144 Fibonacci-coded levels instead of a full 32-bit number; on the V1 models that costs well under a point of accuracy, on the V2 ones 4–7 points.
-- After encoding, ResNet-152 V2 scores 10.00%, exactly what answering the same class for every image scores on CIFAR-10's ten equally common classes; why encoding breaks this one model is not known yet.
+- After encoding, ResNet-152 V2 scores 10.00%, exactly what answering the same class for every image scores on CIFAR-10's ten equally common classes; why encoding breaks this one model is not known yet. An exact 10.00% is also what logits that overflow fp16 give, since argmax over NaN picks class 0 for every image; the notebook evaluated under fp16 autocast then, and from zeckendorf-prune 0.2.2 it re-runs such batches in fp32, so this row awaits a re-run. `scripts/diagnose_encoding.py` on the saved checkpoint tells the two causes apart.
 - Pruned here is measured again from each saved file rather than copied from training, so it can differ from the main table by up to 0.04 points.
 - Flips caught: when one random stored bit is flipped, the flip lands next to another 1 about half the time (46–48% here), and the adjacency check spots it with no extra storage; the other half go unnoticed.
 - Stream size: the Fibonacci stream marks where each weight ends, so it needs no length fields, but at 9.7–10.3 bits per weight it is 35–45% larger than a plain fixed-size code for the same 144 levels (7.17 bits); it buys that marking and the flip check, not smaller files.
