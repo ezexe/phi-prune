@@ -1,0 +1,33 @@
+name: finetune-check
+
+# scripts/finetune_encode_check.py on a CPU runner: fine-tune, prune and
+# encode a ResNet on CIFAR-10, per-layer vs per-channel encoding.
+# A push to the finetune-check branch runs it with the defaults below.
+on:
+  push:
+    branches: [finetune-check]
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "arguments for scripts/finetune_encode_check.py"
+        default: "--arch resnet152 --weights IMAGENET1K_V2"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (CPU torch)
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .
+      - name: Fine-tune, prune, encode
+        run: python scripts/finetune_encode_check.py ${{ inputs.args || '--arch resnet152 --weights IMAGENET1K_V2' }} 2>&1 | grep -v '%|' | tee result.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: finetune-check
+          path: result.txt
