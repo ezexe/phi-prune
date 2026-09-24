@@ -2,7 +2,10 @@ name: probe-encoding
 
 # Manual run of scripts/probe_pretrained_encoding.py on ImageNet-pretrained
 # ResNets (GitHub runners can download torchvision weights and CIFAR-10).
+# A push to the probe-encoding branch runs it with the defaults below.
 on:
+  push:
+    branches: [probe-encoding]
   workflow_dispatch:
     inputs:
       models:
@@ -31,9 +34,9 @@ jobs:
       - name: Probe
         run: >
           python scripts/probe_pretrained_encoding.py
-          --models "${{ inputs.models }}"
-          --images "${{ inputs.images }}"
-          --fp16-images "${{ inputs.fp16_images }}"
+          --models "${{ inputs.models || 'resnet152:IMAGENET1K_V2,resnet152:IMAGENET1K_V1,resnet50:IMAGENET1K_V2' }}"
+          --images "${{ inputs.images || '64' }}"
+          --fp16-images "${{ inputs.fp16_images || '32' }}"
           | tee probe.txt
       - uses: actions/upload-artifact@v4
         with:
