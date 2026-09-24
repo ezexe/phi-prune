@@ -4,8 +4,9 @@ Command-line interface for zeckendorf-prune.
 Usage:
     zeck prune model.pt --output pruned.pt --finetune-epochs 40
     zeck check pruned.pt
-    zeck export pruned.pt --format onnx --output model.onnx
     zeck info pruned.pt
+
+There is no export command yet; use zeckendorf_prune.export.export_onnx.
 """
 
 import argparse
