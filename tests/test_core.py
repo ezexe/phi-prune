@@ -185,6 +185,33 @@ class TestIntegrity:
         cw_corrupt = [1, 1, 1, 0, 1, 0, 0, 0]  # bit 1 flipped
         assert not adjacency_check(cw_corrupt)
 
+    def test_simulate_corruption_matches_exact_rate(self):
+        """Simulated detection rate agrees with enumerating every single-bit flip."""
+        import random
+
+        enc = FibonacciEncoder(n_digits=8)
+        tensor = torch.tensor(enc.grid, dtype=torch.float64)  # one weight per level
+        mask = torch.ones_like(tensor)
+
+        rates = []
+        for val in enc.grid:
+            cw = enc.to_codeword(int(val))
+            caught = 0
+            for i in range(len(cw)):
+                flipped = list(cw)
+                flipped[i] = 1 - flipped[i]
+                caught += not adjacency_check(flipped)
+            rates.append(caught / len(cw))
+        exact = float(np.mean(rates))
+
+        random.seed(0)
+        n = 20_000
+        detected, total = simulate_corruption(tensor, mask, enc, 1.0, 0.0, n_flips=n)
+        assert total == n
+        sigma = np.sqrt(exact * (1 - exact) / n)
+        assert abs(detected / n - exact) < 4 * sigma
+        assert 0.40 < exact < 0.42  # ~40.9% over all 8-digit levels
+
 
 # ── High-level API ──
 
