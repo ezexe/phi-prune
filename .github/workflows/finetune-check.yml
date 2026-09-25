@@ -10,7 +10,7 @@ on:
     inputs:
       args:
         description: "arguments for scripts/finetune_encode_check.py"
-        default: "--arch resnet152 --weights IMAGENET1K_V2"
+        default: "--arch resnet152 --weights IMAGENET1K_V2 --ft-epochs 6"
 
 jobs:
   check:
@@ -26,7 +26,7 @@ jobs:
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           pip install -e .
       - name: Fine-tune, prune, encode
-        run: python scripts/finetune_encode_check.py ${{ inputs.args || '--arch resnet152 --weights IMAGENET1K_V2' }} 2>&1 | grep -v '%|' | tee result.txt
+        run: python scripts/finetune_encode_check.py ${{ inputs.args || '--arch resnet152 --weights IMAGENET1K_V2 --ft-epochs 6' }} 2>&1 | grep -v '%|' | tee result.txt
       - uses: actions/upload-artifact@v4
         with:
           name: finetune-check
