@@ -13,8 +13,8 @@ import json
 import os
 from typing import Dict, Optional
 
-from zeckendorf_prune.encoding import FibonacciEncoder
-from zeckendorf_prune.masks import mask_stats
+from phi_prune.encoding import FibonacciEncoder
+from phi_prune.masks import mask_stats
 
 
 def save_checkpoint(
@@ -26,18 +26,18 @@ def save_checkpoint(
     metadata: Optional[Dict] = None,
 ):
     """
-    Save a pruned model as a Zeckendorf checkpoint.
+    Save a pruned model as a phi-prune checkpoint.
 
     Includes masks, encoding info, and metadata in a single file.
     Load with: data = torch.load(path); model.load_state_dict(data['state_dict'])
     """
-    pattern = getattr(model, "_zeck_prune_stats", {}).get("pattern", "zeckendorf")
+    pattern = getattr(model, "_phi_prune_stats", {}).get("pattern", "phi")
     checkpoint = {
         "state_dict": model.state_dict(),
         "masks": masks,
         "pattern": pattern,
-        "format": "zeckendorf-prune",
-        "version": "0.2.1",
+        "format": "phi-prune",
+        "version": "0.3.0",
     }
 
     if encoder is not None:

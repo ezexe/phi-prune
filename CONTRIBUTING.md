@@ -20,15 +20,15 @@ Clients send pruned weight deltas to the server. Self-delimiting format means pa
 
 **F. Neural architecture search — analytic capacity budgets**
 
-The Zeckendorf mask has a known information capacity: log₂(φ) ≈ 0.694 bits per position. Before training, you can calculate the exact representational budget of each layer. Allocate capacity across layers mathematically rather than by trial-and-error pruning ratios. No other pruning method gives you a closed-form capacity bound.
+The φ mask has a known information capacity: log₂(φ) ≈ 0.694 bits per position. Before training, you can calculate the exact representational budget of each layer. Allocate capacity across layers mathematically rather than by trial-and-error pruning ratios. No other pruning method gives you a closed-form capacity bound.
 
 **G. Adversarial robustness — spectral defense**
 
-Phase 2 showed Zeckendorf pruning pushes 87% of activation energy into low frequencies (vs 52% dense). Phase 4 is testing whether this translates to adversarial resistance. If it does: prune for compression, get robustness for free. No adversarial training (2× compute cost), no input preprocessing, no ensembles.
+Phase 2 showed φ-pruning pushes 87% of activation energy into low frequencies (vs 52% dense). Phase 4 is testing whether this translates to adversarial resistance. If it does: prune for compression, get robustness for free. No adversarial training (2× compute cost), no input preprocessing, no ensembles.
 
 **H. Knowledge distillation — smoother teacher**
 
-A Zeckendorf-pruned teacher produces smoother soft labels (less high-frequency noise in the output distribution). Smoother soft labels are easier for a student network to learn from. A pruned teacher might be a better distillation source than the dense original despite lower accuracy.
+A φ-pruned teacher produces smoother soft labels (less high-frequency noise in the output distribution). Smoother soft labels are easier for a student network to learn from. A pruned teacher might be a better distillation source than the dense original despite lower accuracy.
 
 **I. Quantization-aware training — Fibonacci as the quantization grid**
 
@@ -36,4 +36,4 @@ Instead of uniform INT8 levels, quantize to Fibonacci levels (55 levels at 8 dig
 
 **J. Model integrity verification — deployment pipeline checksums**
 
-Before deploying a model update to production, run `zeck check model.pt`. One command verifies every weight in every pruned layer hasn't been corrupted since training. Integrates into CI/CD — fail the deployment if any mask is violated. No cryptographic hashing needed for structural integrity (use hashing separately for authentication).
+Before deploying a model update to production, run `phi-prune check model.pt`. One command verifies every weight in every pruned layer hasn't been corrupted since training. Integrates into CI/CD — fail the deployment if any mask is violated. No cryptographic hashing needed for structural integrity (use hashing separately for authentication).

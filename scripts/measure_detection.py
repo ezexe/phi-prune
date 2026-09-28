@@ -26,10 +26,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from zeckendorf_prune import prune
-from zeckendorf_prune.encoding import FibonacciEncoder
-from zeckendorf_prune.integrity import simulate_corruption
-from zeckendorf_prune.masks import zeckendorf_mask
+from phi_prune import prune
+from phi_prune.encoding import FibonacciEncoder
+from phi_prune.integrity import simulate_corruption
+from phi_prune.masks import phi_mask
 
 OLD_ENCODER_COMMIT = "ae7396e"
 SYNTHETIC_SHAPE = (256, 128, 3, 3)
@@ -44,6 +44,9 @@ def load_old_encoder():
     )
     mod = types.ModuleType("old_encoding")
     exec(src, mod.__dict__)
+    # integrity.simulate_corruption calls encoder.levels(), added after this commit;
+    # it only reads max_value, so the current implementation fits the old class
+    mod.FibonacciEncoder.levels = FibonacciEncoder.levels
     return mod.FibonacciEncoder
 
 
@@ -134,7 +137,7 @@ def main():
     else:
         def synthetic(dist):
             w = synthetic_weights(dist, torch.Generator().manual_seed(args.seed))
-            return [(w, zeckendorf_mask(w))]
+            return [(w, phi_mask(w))]
         setups = [(d, lambda d=d: synthetic(d)) for d in DISTRIBUTIONS]
 
     print(f"{'digits':>6} {'weights':>11} {'encoder':>7} {'rmse':>8} "

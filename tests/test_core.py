@@ -1,4 +1,4 @@
-"""Tests for zeckendorf-prune core functionality."""
+"""Tests for phi-prune core functionality."""
 
 import copy
 import json
@@ -7,70 +7,70 @@ import torch
 import torch.nn as nn
 import pytest
 
-from zeckendorf_prune.masks import (
-    zeckendorf_dp, zeckendorf_mask, verify_mask, mask_stats, two_four_mask, verify_two_four,
+from phi_prune.masks import (
+    adjacency_dp, phi_mask, verify_mask, mask_stats, two_four_mask, verify_two_four,
 )
-from zeckendorf_prune.encoding import FibonacciEncoder
-from zeckendorf_prune.integrity import adjacency_check, simulate_corruption
-from zeckendorf_prune.api import prune, finetune, check, evaluate
-from zeckendorf_prune.export import export_bitstream, load_bitstream
+from phi_prune.encoding import FibonacciEncoder
+from phi_prune.integrity import adjacency_check, simulate_corruption
+from phi_prune.api import prune, finetune, check, evaluate
+from phi_prune.export import export_bitstream, load_bitstream
 
 
 # ── Mask DP ──
 
-class TestZeckendorfDP:
+class TestAdjacencyDP:
     def test_no_adjacent_ones(self):
         """Core invariant: output never has consecutive 1s."""
         for _ in range(100):
             scores = np.random.rand(np.random.randint(1, 200))
-            mask = zeckendorf_dp(scores)
+            mask = adjacency_dp(scores)
             assert verify_mask(mask), f"Adjacent 1s found in mask for n={len(scores)}"
 
     def test_density_at_most_half(self):
         """Density never exceeds 50%."""
         for n in [1, 2, 3, 10, 50, 100, 199]:
             scores = np.ones(n)
-            mask = zeckendorf_dp(scores)
+            mask = adjacency_dp(scores)
             assert mask.sum() <= (n + 1) // 2
 
     def test_optimal_uniform(self):
         """On uniform scores, DP should pick alternating pattern (maximum independent set)."""
         scores = np.ones(10)
-        mask = zeckendorf_dp(scores)
+        mask = adjacency_dp(scores)
         assert mask.sum() == 5  # ⌊10/2⌋ = 5
 
     def test_prefers_high_scores(self):
         """DP should keep higher-scored positions."""
         scores = np.array([0.1, 10.0, 0.1, 10.0, 0.1])
-        mask = zeckendorf_dp(scores)
+        mask = adjacency_dp(scores)
         assert mask[1] == 1 and mask[3] == 1
 
     def test_empty(self):
-        mask = zeckendorf_dp(np.array([]))
+        mask = adjacency_dp(np.array([]))
         assert len(mask) == 0
 
     def test_single(self):
-        mask = zeckendorf_dp(np.array([5.0]))
+        mask = adjacency_dp(np.array([5.0]))
         assert mask[0] == 1
 
 
 # ── Mask on tensors ──
 
-class TestZeckendorfMask:
+class TestPhiMask:
     def test_conv2d_shape(self):
         w = torch.randn(16, 8, 3, 3)
-        mask = zeckendorf_mask(w, axis=0)
+        mask = phi_mask(w, axis=0)
         assert mask.shape == w.shape
 
     def test_linear_shape(self):
         w = torch.randn(64, 32)
-        mask = zeckendorf_mask(w, axis=0)
+        mask = phi_mask(w, axis=0)
         assert mask.shape == w.shape
 
     def test_broadcast_consistency(self):
         """All elements along non-pruned dims should share the same mask value."""
         w = torch.randn(16, 8, 3, 3)
-        mask = zeckendorf_mask(w, axis=0)
+        mask = phi_mask(w, axis=0)
         for i in range(16):
             vals = mask[i].unique()
             assert len(vals) == 1  # all 0 or all 1
@@ -274,7 +274,7 @@ class TestAPI:
     def test_density_under_half(self):
         model = self._make_model()
         pruned, masks = prune(model, prune_head=True)  # every eligible layer pruned, head included
-        assert pruned._zeck_prune_stats["density"] <= 0.51  # ≤50% + float tolerance
+        assert pruned._phi_prune_stats["density"] <= 0.51  # ≤50% + float tolerance
 
     def test_head_left_dense_by_default(self):
         """The last eligible layer (the 10-class head here) keeps every row."""
@@ -307,8 +307,8 @@ class TestAPI:
         assert set(masks) == {"0.weight", "2.weight"}
         for mask in masks.values():
             assert verify_two_four(mask.flatten(1).amax(1).tolist())  # one value per output channel
-        assert pruned._zeck_prune_stats["pattern"] == "2:4"
-        assert pruned._zeck_prune_stats["density"] == pytest.approx(0.5)  # 16 and 32 channels: whole groups
+        assert pruned._phi_prune_stats["pattern"] == "2:4"
+        assert pruned._phi_prune_stats["density"] == pytest.approx(0.5)  # 16 and 32 channels: whole groups
         report = check(pruned, masks)
         assert report["_summary"]["pattern"] == "2:4"
         assert report["_summary"]["all_masks_valid"]
@@ -342,7 +342,7 @@ class TestAPI:
     @pytest.mark.filterwarnings("ignore:CUDA is not available")  # amp forced on without CUDA
     def test_evaluate_reruns_non_finite_amp_batches_in_fp32(self, monkeypatch):
         """A batch whose fp16 logits overflow is re-run in fp32, not scored as class 0."""
-        import zeckendorf_prune.api as api
+        import phi_prune.api as api
 
         class OverflowsOnce(nn.Module):
             """Right on every call except the first, which returns NaN like an fp16 overflow."""
@@ -396,7 +396,7 @@ class TestExport:
                 assert min(levels) == 0
                 expected.extend(levels)
 
-        path = tmp_path / "model.zeck"
+        path = tmp_path / "model.phi"
         stats = export_bitstream(pruned, masks, enc, scales, str(path))
         assert b"\r" not in path.read_bytes()  # the header line ends in "\n" on every platform
         header_line, payload = path.read_text().split("\n", 1)
@@ -415,7 +415,7 @@ class TestExport:
     def test_load_bitstream_restores_encoded_weights(self, tmp_path, axis):
         """load_bitstream writes the decoded weights back into the masked positions, bit for bit."""
         pruned, masks, enc, scales = self._encoded_model(axis)
-        path = str(tmp_path / "model.zeck")
+        path = str(tmp_path / "model.phi")
         export_bitstream(pruned, masks, enc, scales, path)
 
         restored = copy.deepcopy(pruned)
@@ -429,7 +429,7 @@ class TestExport:
 
     def test_per_channel_passes_integrity_check(self):
         """cassini_check reads per-channel (scale, offset) arrays: clean encoded weights all pass."""
-        from zeckendorf_prune.integrity import cassini_check
+        from phi_prune.integrity import cassini_check
 
         pruned, masks, enc, scales = self._encoded_model(axis=0)
         report = cassini_check(pruned, masks, enc, scales)["_aggregate"]
@@ -439,7 +439,7 @@ class TestExport:
     def test_load_bitstream_refusals(self, tmp_path):
         """load_bitstream refuses an old header, a short payload or a misfit mask, and writes nothing."""
         pruned, masks, enc, scales = self._encoded_model()
-        path = tmp_path / "model.zeck"
+        path = tmp_path / "model.phi"
         export_bitstream(pruned, masks, enc, scales, str(path))
         header_line, payload = path.read_text().split("\n", 1)
         old = json.loads(header_line)
@@ -462,3 +462,22 @@ class TestExport:
             with pytest.raises(ValueError, match=message):
                 load_bitstream(target, file_masks, str(path))
         assert all(torch.equal(before[k], v) for k, v in target.state_dict().items())
+
+    @pytest.mark.parametrize("saved_pattern", ["phi", "zeckendorf", None])
+    def test_cli_check_reads_current_and_legacy_checkpoints(self, tmp_path, saved_pattern):
+        """phi-prune check accepts pattern "phi", the pre-0.3.0 "zeckendorf", and no pattern."""
+        import argparse
+        from phi_prune.cli import cmd_check
+        from phi_prune.export import save_checkpoint
+
+        pruned, masks, _, _ = self._encoded_model()
+        path = str(tmp_path / "model.pt")
+        save_checkpoint(pruned, masks, path)
+        data = torch.load(path, weights_only=False)
+        assert data["pattern"] == "phi" and data["format"] == "phi-prune"
+        if saved_pattern is None:
+            del data["pattern"]
+        else:
+            data["pattern"] = saved_pattern
+        torch.save(data, path)
+        assert cmd_check(argparse.Namespace(model=path)) == 0

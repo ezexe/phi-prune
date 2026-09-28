@@ -1,5 +1,5 @@
 """
-Sparse inference kernels for Zeckendorf-constrained weight matrices.
+Sparse inference kernels for adjacency-constrained weight matrices.
 
 STATUS: Placeholder. Ship Path B first (convert to CSR, use existing BLAS).
 Path A (custom kernels exploiting the adjacency guarantee) comes later.
@@ -14,7 +14,7 @@ there is at least one zero. This means:
 
 def sparse_matmul_csr(weight, mask, input_tensor):
     """
-    Path B: Convert Zeckendorf-sparse weight to CSR and use torch.sparse.mm.
+    Path B: Convert adjacency-sparse weight to CSR and use torch.sparse.mm.
 
     This is the ship-now option — no custom CUDA code, works everywhere.
     Performance is decent but doesn't exploit the adjacency structure.
@@ -26,7 +26,7 @@ def sparse_matmul_csr(weight, mask, input_tensor):
 
 
 # TODO: Path A — custom kernel exploiting adjacency guarantee
-# def sparse_matmul_zeck(weight, mask, input_tensor):
+# def sparse_matmul_phi(weight, mask, input_tensor):
 #     """
 #     Custom kernel: stride-2 minimum access pattern, predictable prefetch.
 #     Target: ONNX Runtime custom op, or direct CUDA kernel.

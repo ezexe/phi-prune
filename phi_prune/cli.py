@@ -1,12 +1,12 @@
 """
-Command-line interface for zeckendorf-prune.
+Command-line interface for phi-prune.
 
 Usage:
-    zeck prune model.pt --output pruned.pt --finetune-epochs 40
-    zeck check pruned.pt
-    zeck info pruned.pt
+    phi-prune prune model.pt --output pruned.pt --finetune-epochs 40
+    phi-prune check pruned.pt
+    phi-prune info pruned.pt
 
-There is no export command yet; use zeckendorf_prune.export.export_onnx.
+There is no export command yet; use phi_prune.export.export_onnx.
 """
 
 import argparse
@@ -15,10 +15,13 @@ import sys
 
 import torch
 
+# Pattern names that checkpoints saved by older versions carry
+LEGACY_PATTERNS = {"zeckendorf": "phi"}
+
 
 def cmd_prune(args):
     """Prune a saved model checkpoint."""
-    from zeckendorf_prune.api import prune
+    from phi_prune.api import prune
 
     print(f"Loading {args.model}...")
     state_dict = torch.load(args.model, map_location="cpu", weights_only=True)
@@ -27,7 +30,7 @@ def cmd_prune(args):
     print("ERROR: Standalone pruning requires --arch flag (not yet implemented).")
     print("Use the Python API instead:")
     print()
-    print("    from zeckendorf_prune import prune, finetune")
+    print("    from phi_prune import prune, finetune")
     print("    model, masks = prune(model, density=0.5)")
     print("    finetune(model, train_loader, epochs=40, masks=masks)")
     sys.exit(1)
@@ -43,10 +46,12 @@ def cmd_check(args):
         print("Save with: torch.save({'state_dict': model.state_dict(), 'masks': masks}, path)")
         sys.exit(1)
 
-    from zeckendorf_prune.masks import get_pattern
+    from phi_prune.masks import get_pattern
 
     masks = data["masks"]
-    kind = data.get("pattern", "zeckendorf")  # checkpoints saved before 2:4 existed are Zeckendorf
+    # checkpoints saved before 2:4 existed have no pattern, and before 0.3.0 this one was "zeckendorf"
+    kind = data.get("pattern", "phi")
+    kind = LEGACY_PATTERNS.get(kind, kind)
     verify = get_pattern(kind)[1]
     all_valid = True
 
@@ -67,7 +72,7 @@ def cmd_check(args):
         if not valid:
             all_valid = False
 
-    rule = "the adjacency constraint" if kind == "zeckendorf" else f"the {kind} pattern"
+    rule = "the adjacency constraint" if kind == "phi" else f"the {kind} pattern"
     if all_valid:
         print(f"\n✓ All masks satisfy {rule}.")
     else:
@@ -92,13 +97,13 @@ def cmd_info(args):
         print(f"\n  Overall: {total_active:.0f}/{total_params} "
               f"({100*total_active/total_params:.1f}% density)")
     else:
-        print("Not a zeckendorf-prune checkpoint (no masks found).")
+        print("Not a phi-prune checkpoint (no masks found).")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="zeck",
-        description="Zeckendorf-constrained structured sparsity",
+        prog="phi-prune",
+        description="φ-pruning: adjacency-constrained structured sparsity",
     )
     sub = parser.add_subparsers(dest="command")
 

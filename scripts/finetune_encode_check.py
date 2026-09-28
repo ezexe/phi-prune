@@ -2,7 +2,7 @@
 Fine-tune, prune and encode a ResNet on CIFAR-10, then compare encodings.
 
 A reduced CPU version of the notebook's variant pipeline (dense fine-tune,
-conv-only Zeckendorf prune, mask-aware fine-tune) followed by its encoding
+conv-only φ-pruning, mask-aware fine-tune) followed by its encoding
 cell, run once with one scale and offset per layer (the encoding behind the
 README's 10.00% for ResNet-152 V2) and once per output channel. Each model
 is evaluated in fp32 and, on the first --fp16-test images, under CPU fp16
@@ -23,8 +23,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from zeckendorf_prune import finetune, prune
-from zeckendorf_prune.encoding import FibonacciEncoder
+from phi_prune import finetune, prune
+from phi_prune.encoding import FibonacciEncoder
 
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
 STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)

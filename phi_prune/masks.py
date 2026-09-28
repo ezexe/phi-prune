@@ -1,5 +1,5 @@
 """
-Zeckendorf-constrained mask generation.
+Adjacency-constrained mask generation.
 
 The adjacency constraint: no two consecutive positions may both be active.
 This is the same (1,∞)-RLL constraint that governs Fibonacci coding,
@@ -18,7 +18,7 @@ import numpy as np
 from typing import Tuple, Optional
 
 
-def zeckendorf_dp(scores: np.ndarray) -> np.ndarray:
+def adjacency_dp(scores: np.ndarray) -> np.ndarray:
     """
     Find the maximum-weight independent set with no two adjacent elements.
 
@@ -66,13 +66,13 @@ def zeckendorf_dp(scores: np.ndarray) -> np.ndarray:
     return mask
 
 
-def zeckendorf_mask(
+def phi_mask(
     weight: torch.Tensor,
     axis: int = 0,
     score_fn: str = "magnitude",
 ) -> torch.Tensor:
     """
-    Generate a Zeckendorf-constrained pruning mask for a weight tensor.
+    Generate an adjacency-constrained pruning mask for a weight tensor.
 
     The mask enforces: no two adjacent positions along `axis` are both active.
     Active positions are chosen to maximize total importance (weight magnitude
@@ -102,7 +102,7 @@ def zeckendorf_mask(
         raise ValueError(f"Unknown score function: {score_fn}")
 
     # Run DP to find optimal mask
-    mask_1d = zeckendorf_dp(scores)
+    mask_1d = adjacency_dp(scores)
 
     # Broadcast mask to full tensor shape
     shape = [1] * weight.dim()
@@ -122,8 +122,8 @@ def two_four_mask(
     Generate a 2-of-4 pruning mask: in every group of 4 consecutive positions
     along `axis`, keep the 2 with the highest importance.
 
-    The baseline that .docs/experiment/Zeckendorf.py compares the Zeckendorf
-    pattern against. Like zeckendorf_mask, it scores whole slices along `axis`
+    The baseline that .docs/experiment/Zeckendorf.py compares the φ
+    pattern against. Like phi_mask, it scores whole slices along `axis`
     and broadcasts, so for axis=0 it keeps or drops whole output channels —
     unlike NVIDIA's hardware 2:4 sparsity, which keeps 2 of every 4 weights
     inside each row. A trailing group shorter than 4 is kept whole.
@@ -152,7 +152,7 @@ def two_four_mask(
 
 def verify_mask(mask_1d) -> bool:
     """
-    Verify that a 1D binary pattern satisfies the Zeckendorf constraint:
+    Verify that a 1D binary pattern satisfies the adjacency constraint:
     no two consecutive 1s.
 
     Args:
@@ -185,12 +185,12 @@ def verify_two_four(mask_1d) -> bool:
     return all(sum(bits[i:i + 4]) == 2 for i in range(0, full, 4)) and all(bits[full:])
 
 
-def mask_stats(mask: torch.Tensor, axis: int = 0, pattern: str = "zeckendorf") -> dict:
+def mask_stats(mask: torch.Tensor, axis: int = 0, pattern: str = "phi") -> dict:
     """
     Compute statistics for a pruning mask.
 
     Args:
-        mask: Mask tensor from zeckendorf_mask or two_four_mask
+        mask: Mask tensor from phi_mask or two_four_mask
         axis: Dimension the pattern runs along
         pattern: Which rule "valid" checks — a key of PATTERNS
 
@@ -221,7 +221,7 @@ def mask_stats(mask: torch.Tensor, axis: int = 0, pattern: str = "zeckendorf") -
 
 # Mask patterns by name: (mask generator, 1D verifier)
 PATTERNS = {
-    "zeckendorf": (zeckendorf_mask, verify_mask),
+    "phi": (phi_mask, verify_mask),
     "2:4": (two_four_mask, verify_two_four),
 }
 

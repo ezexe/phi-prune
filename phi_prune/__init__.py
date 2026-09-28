@@ -1,8 +1,8 @@
 """
-zeckendorf-prune: Structured sparsity via the adjacency constraint.
+phi-prune: Structured sparsity via the adjacency constraint.
 
-    from zeckendorf_prune import prune, finetune, check
-    from zeckendorf_prune.export import export_onnx
+    from phi_prune import prune, finetune, check
+    from phi_prune.export import export_onnx
 
     # Prune a model
     pruned_model, masks = prune(model, density=0.5)
@@ -17,12 +17,12 @@ zeckendorf-prune: Structured sparsity via the adjacency constraint.
     export_onnx(pruned_model, "model_sparse.onnx")
 """
 
-__version__ = "0.2.3"
+__version__ = "0.3.0"
 
-from zeckendorf_prune.api import prune, finetune, check, evaluate
-from zeckendorf_prune.encoding import FibonacciEncoder
-from zeckendorf_prune.integrity import cassini_check
-from zeckendorf_prune.masks import zeckendorf_mask, verify_mask
+from phi_prune.api import prune, finetune, check, evaluate
+from phi_prune.encoding import FibonacciEncoder
+from phi_prune.integrity import cassini_check
+from phi_prune.masks import phi_mask, verify_mask
 
 __all__ = [
     "prune",
@@ -31,6 +31,6 @@ __all__ = [
     "evaluate",
     "FibonacciEncoder",
     "cassini_check",
-    "zeckendorf_mask",
+    "phi_mask",
     "verify_mask",
 ]

@@ -10,7 +10,7 @@ notebook:
   dense            the pretrained weights
   dense+enc        every conv layer encoded with an all-ones mask
                    (isolates encoding from pruning)
-  pruned           Zeckendorf-pruned convs, as the notebook prunes them
+  pruned           φ-pruned convs, as the notebook prunes them
   pruned+enc       the pruned convs encoded, as the notebook's encoding cell does
 
 For each variant it prints the share of images whose logits are not finite
@@ -33,8 +33,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from zeckendorf_prune import prune
-from zeckendorf_prune.encoding import FibonacciEncoder
+from phi_prune import prune
+from phi_prune.encoding import FibonacciEncoder
 
 FP16_MAX = 65504.0
 MEAN = (0.485, 0.456, 0.406)

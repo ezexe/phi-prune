@@ -1,7 +1,7 @@
 """
-High-level API for Zeckendorf pruning.
+High-level API for φ-pruning.
 
-    from zeckendorf_prune import prune, finetune, check
+    from phi_prune import prune, finetune, check
 
     model, masks = prune(model, density=0.5)
     finetune(model, train_loader, epochs=40, masks=masks)
@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from zeckendorf_prune.masks import get_pattern, mask_stats
+from phi_prune.masks import get_pattern, mask_stats
 
 
 # ───────────────────────────────────────────────────────────
@@ -32,10 +32,10 @@ def prune(
     score_fn: str = "magnitude",
     prune_head: bool = False,
     exclude: Iterable[str] = (),
-    pattern: str = "zeckendorf",
+    pattern: str = "phi",
 ) -> Tuple[nn.Module, Dict[str, torch.Tensor]]:
     """
-    Apply Zeckendorf-constrained pruning to a model.
+    Apply adjacency-constrained pruning to a model.
 
     Generates an adjacency-constrained mask for each eligible layer
     and zeros the pruned weights. pattern="2:4" applies the 2-of-4
@@ -59,7 +59,7 @@ def prune(
                     logit
         exclude: Module names to leave dense (e.g. {"fc"}), for a head
                  that is not registered last or any other layer to keep
-        pattern: "zeckendorf" (no two adjacent positions along `axis`) or
+        pattern: "phi" (no two adjacent positions along `axis`) or
                  "2:4" (2 of every 4 consecutive positions along `axis`, the
                  baseline in .docs/experiment/Zeckendorf.py; for axis=0 it
                  keeps whole channels, not NVIDIA's 2-of-4 weights per row)
@@ -108,7 +108,7 @@ def prune(
     # Attach stats
     stats["density"] = stats["active_params"] / stats["total_params"] if stats["total_params"] > 0 else 0
     stats["sparsity"] = 1.0 - stats["density"]
-    model._zeck_prune_stats = stats
+    model._phi_prune_stats = stats
 
     return model, masks
 
@@ -317,14 +317,14 @@ def check(
     Args:
         model: Pruned model
         masks: Dict of pruning masks
-        pattern: The pattern to validate ("zeckendorf" or "2:4"); None reads
-                 it from the stats prune() attached, else "zeckendorf"
+        pattern: The pattern to validate ("phi" or "2:4"); None reads
+                 it from the stats prune() attached, else "phi"
 
     Returns:
         dict with per-layer and aggregate results
     """
     if pattern is None:
-        pattern = getattr(model, "_zeck_prune_stats", {}).get("pattern", "zeckendorf")
+        pattern = getattr(model, "_phi_prune_stats", {}).get("pattern", "phi")
     results = {}
     all_valid = True
     all_zeros_enforced = True

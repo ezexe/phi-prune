@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from zeckendorf_prune.encoding import FibonacciEncoder
+from phi_prune.encoding import FibonacciEncoder
 
 FP16_MAX = 65504.0
 MEAN = (0.485, 0.456, 0.406)

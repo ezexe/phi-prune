@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "zeckendorf-prune"
-version = "0.2.3"
-description = "Zeckendorf-constrained structured sparsity for neural networks"
+name = "phi-prune"
+version = "0.3.0"
+description = "φ-pruning: adjacency-constrained structured sparsity for neural networks"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
@@ -19,7 +19,7 @@ export = ["onnx>=1.14", "onnxruntime>=1.15"]
 dev = ["pytest>=7.0", "pytest-cov"]
 
 [project.scripts]
-zeck = "zeckendorf_prune.cli:main"
+phi-prune = "phi_prune.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["zeckendorf_prune*"]
+include = ["phi_prune*"]

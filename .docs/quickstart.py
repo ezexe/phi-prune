@@ -1,6 +1,6 @@
 """
-Quick start: Prune a pretrained ResNet-18 with Zeckendorf constraint.
-Run from inside the zeckendorf-prune directory.
+Quick start: Prune a pretrained ResNet-18 with the φ adjacency constraint.
+Run from inside the phi-prune directory.
 
     pip install -e .
     python quickstart.py
@@ -9,8 +9,8 @@ Run from inside the zeckendorf-prune directory.
 import torch
 import torchvision
 import torchvision.transforms as transforms
-from zeckendorf_prune import prune, finetune, check
-from zeckendorf_prune.encoding import FibonacciEncoder
+from phi_prune import prune, finetune, check
+from phi_prune.encoding import FibonacciEncoder
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
@@ -53,9 +53,9 @@ dense_acc = dense_results["best_val_acc"]
 print(f"   Dense: {dense_acc:.2f}%")
 
 # ── 4. Prune ──
-print("\n4. Applying Zeckendorf pruning...")
+print("\n4. Applying φ-pruning...")
 pruned_model, masks = prune(model, inplace=False)
-stats = pruned_model._zeck_prune_stats
+stats = pruned_model._phi_prune_stats
 print(f"   Density: {stats['density']:.1%}")
 print(f"   Pruned layers: {stats['pruned_layers']}")
 
@@ -106,6 +106,6 @@ print(f"  Masks valid:        {report['_summary']['all_masks_valid']}")
 print(f"  Encoding levels:    {encoder.n_levels}")
 print(f"{'='*50}")
 
-from zeckendorf_prune.export import save_checkpoint
+from phi_prune.export import save_checkpoint
 save_checkpoint(pruned_model, masks, "model_pruned.pt")
 print("Saved model_pruned.pt")

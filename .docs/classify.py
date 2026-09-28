@@ -1,5 +1,5 @@
 """
-Inference with a Zeckendorf-pruned ResNet-18.
+Inference with a φ-pruned ResNet-18.
 Classifies images into CIFAR-10 categories.
 
 Usage:
@@ -111,7 +111,7 @@ def webcam_mode(model):
             break
 
         # Show live feed
-        cv2.imshow("Zeckendorf Classifier - press 'c' to classify, 'q' to quit", frame)
+        cv2.imshow("phi-prune Classifier - press 'c' to classify, 'q' to quit", frame)
         key = cv2.waitKey(1) & 0xFF
 
         if key == ord('q'):
